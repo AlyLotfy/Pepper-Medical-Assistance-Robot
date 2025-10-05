@@ -1,0 +1,12 @@
+html, body { margin:0; padding:0; font-family: system-ui, Arial; background:#0b1020; color:#fff; }
+header { text-align:center; padding:24px; }
+h1 { margin:0 0 6px; font-size:42px; }
+p { margin:0; opacity:.8; }
+main { display:grid; grid-template-columns:1fr 1fr; gap:18px; padding:24px; max-width:1100px; margin:0 auto; }
+button.action, .call-nurse {
+  font-size:28px; padding:26px; border:0; border-radius:20px; background:#1b2a5b; color:#fff;
+}
+.call-nurse { background:#7a0e0e; }
+footer { display:flex; justify-content:center; gap:12px; padding:16px 0 28px; }
+footer button { font-size:22px; padding:12px 18px; border-radius:14px; border:0; }
+#status { grid-column:1 / -1; font-size:18px; opacity:.9; min-height:30px; }

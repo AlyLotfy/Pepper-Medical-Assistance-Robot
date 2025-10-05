@@ -1,10 +1,9 @@
-# Ignore virtual environment
+# Exclude environment and SDK folders
 pepper_env/
+pynaoqi-*/
+Nao_Pepper/
 
-# Ignore SDK or large binary files
-pynaoqi-*
-
-# Ignore common system and IDE files
+# Ignore system and temporary files
 __pycache__/
 *.pyc
 .vscode/

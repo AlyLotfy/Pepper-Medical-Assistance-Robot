@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Book Appointment</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    body {font-family:'Poppins',sans-serif;background:linear-gradient(135deg,#e3f2fd,#fff);display:flex;justify-content:center;align-items:center;height:100vh;}
+    .card {background:white;border-radius:20px;padding:30px;width:350px;box-shadow:0 8px 16px rgba(0,0,0,0.1);}
+    input,button {width:100%;margin:8px 0;padding:10px;border-radius:8px;border:1px solid #ccc;}
+    button {background:#2196f3;color:white;font-weight:600;cursor:pointer;transition:0.3s;}
+    button:hover {background:#0d47a1;}
+    a {color:#2196f3;text-decoration:none;display:block;text-align:center;margin-top:10px;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>📅 Book Appointment</h2>
+    <input type="text" id="name" placeholder="Your Name" required>
+    <input type="text" id="doctor" placeholder="Doctor’s Name" required>
+    <input type="date" id="date" required>
+    <button onclick="book()">Confirm</button>
+    <a href="index.html">⬅ Back to Home</a>
+  </div>
+  <script>
+    function book() {
+      alert("Your appointment has been booked successfully!");
+      window.location.href = "index.html";
+    }
+  </script>
+</body>
+</html>

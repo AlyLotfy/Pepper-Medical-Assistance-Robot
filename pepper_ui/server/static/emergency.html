@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Emergency Help</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    body {font-family:'Poppins',sans-serif;background:linear-gradient(135deg,#ffebee,#fff);display:flex;justify-content:center;align-items:center;height:100vh;}
+    .card {background:white;border-radius:20px;padding:30px;width:350px;box-shadow:0 8px 16px rgba(0,0,0,0.1);text-align:center;}
+    button {width:100%;margin:10px 0;padding:12px;border-radius:8px;background:#e53935;color:white;font-weight:600;cursor:pointer;transition:0.3s;}
+    button:hover {background:#b71c1c;}
+    a {color:#2196f3;text-decoration:none;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🚨 Emergency Help</h2>
+    <p>If you are in a medical emergency, please stay calm.<br>We will notify the medical team immediately.</p>
+    <button onclick="call()">Call Emergency</button>
+    <a href="index.html">⬅ Back to Home</a>
+  </div>
+  <script>
+    function call(){
+      alert("🚑 Emergency team notified!");
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Doctor Schedule</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    body {font-family:'Poppins',sans-serif;background:linear-gradient(135deg,#f1f8e9,#fff);display:flex;justify-content:center;align-items:center;height:100vh;}
+    .card {background:white;border-radius:20px;padding:30px;width:350px;box-shadow:0 8px 16px rgba(0,0,0,0.1);}
+    select,button {width:100%;margin:10px 0;padding:10px;border-radius:8px;border:1px solid #ccc;}
+    button {background:#43a047;color:white;font-weight:600;cursor:pointer;transition:0.3s;}
+    button:hover {background:#2e7d32;}
+    p {margin-top:10px;color:#333;}
+    a {color:#2196f3;text-decoration:none;display:block;text-align:center;margin-top:10px;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>👨‍⚕️ Doctor Schedule</h2>
+    <select id="doctor">
+      <option value="dr_ali">Dr. Ali – Cardiologist</option>
+      <option value="dr_sara">Dr. Sara – Pediatrician</option>
+      <option value="dr_hassan">Dr. Hassan – Orthopedic</option>
+    </select>
+    <button onclick="show()">Show Schedule</button>
+    <p id="result"></p>
+    <a href="index.html">⬅ Back to Home</a>
+  </div>
+  <script>
+    function show(){
+      const d=document.getElementById("doctor").value;
+      const s={
+        dr_ali:"Mon, Wed, Fri – 9:00 AM to 1:00 PM",
+        dr_sara:"Sun, Tue, Thu – 10:00 AM to 2:00 PM",
+        dr_hassan:"Mon–Thu – 2:00 PM to 6:00 PM"
+      };
+      document.getElementById("result").textContent="🕒 "+s[d];
+    }
+  </script>
+</body>
+</html>

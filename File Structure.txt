@@ -1,0 +1,37 @@
+GRADUATION PROJECT/
+│
+├─ pepper_env/               # virtual envs live here (auto-generated)
+│
+├─ robot/                    # Pepper bridge (Python 2.7, NAOqi)
+│   ├─ bridge.py              # WebSocket client → NAOqi proxies
+│   ├─ config.ini             # Pepper IP + server address
+│   └─ __init__.py            # empty (optional, for package)
+│
+├─ server/                   # Backend (Python 3.x, FastAPI)
+│   ├─ app/
+│   │   ├─ main.py            # FastAPI entrypoint
+│   │   ├─ rag.py             # FAQ retrieval (local RAG)
+│   │   ├─ triage.py          # Triage logic (rule-based scoring)
+│   │   ├─ bridge_bus.py      # WebSocket pub/sub to robot
+│   │   └─ __init__.py
+│   ├─ tools/
+│   │   └─ build_faq_index.py # one-time FAQ embedding/index script
+│   ├─ .env                   # backend config (robot ip, ports, db path)
+│   └─ requirements.txt       # python packages for Py3 env
+│
+├─ pepper_ui/                # Tablet web app (static files)
+│   ├─ index.html             # Main UI page (tabs: check-in, faq, triage)
+│   ├─ style.css              # UI styling (big buttons, large font)
+│   └─ script.js              # fetch() calls → backend APIs
+│
+├─ Proposals/                 # docs (your proposal, etc.)
+│
+├─ Scripts/                   # helper scripts
+│   └─ run_all.bat            # optional: run server + bridge together
+│
+└─ pynaoqi-.../lib/naoqi.py   # NAOqi SDK (already in your tree)
+
+
+$SDK = "C:\Users\ADMIN\Documents\AAST\Gradution Project\pynaoqi-python2.7-2.8.6.23-win64-vs2015-20191127_152649\pynaoqi-python2.7-2.8.6.23-win64-vs2015-20191127_152649"
+$env:PYTHONPATH = "$SDK\lib;$SDK\lib\python2.7\site-packages;$env:PYTHONPATH"
+$env:PATH       = "$SDK\lib;$env:PATH"
