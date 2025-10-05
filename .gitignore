@@ -1,0 +1,11 @@
+# Ignore virtual environment
+pepper_env/
+
+# Ignore SDK or large binary files
+pynaoqi-*
+
+# Ignore common system and IDE files
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
