@@ -15,7 +15,7 @@ def main():
         tts = ALProxy("ALTextToSpeech", ROBOT_IP, PORT)
 
         # Make Pepper talk
-        tts.say("Hello, I am Pepper. Connection successful!")
+        tts.say("Welcome to college of Artificial Intelligence!")
 
         print("✅ Pepper spoke successfully!")
 

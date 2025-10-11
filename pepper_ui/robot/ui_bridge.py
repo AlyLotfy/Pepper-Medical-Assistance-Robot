@@ -5,7 +5,7 @@ import time
 
 ROBOT_IP = "1.1.1.10"   
 ROBOT_PORT = 9559
-UI_URL = "http://1.1.1.244:8080/" 
+UI_URL = "http://1.1.1.246:8080/" 
 
 # Services
 tts = ALProxy("ALTextToSpeech", ROBOT_IP, ROBOT_PORT)

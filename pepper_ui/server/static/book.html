@@ -5,7 +5,27 @@
   <title>Book Appointment</title>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    body {font-family:'Poppins',sans-serif;background:linear-gradient(135deg,#e3f2fd,#fff);display:flex;justify-content:center;align-items:center;height:100vh;}
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #e3f2fd, #ffffff);
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .container, .card, .chatbox {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+      width: 90%;           /* ← makes it responsive */
+      max-width: 1200px;    /* ← keeps layout nice on large screens */
+      padding: 30px;
+      margin: 40px auto;
+      box-sizing: border-box;
+    }
     .card {background:white;border-radius:20px;padding:30px;width:350px;box-shadow:0 8px 16px rgba(0,0,0,0.1);}
     input,button {width:100%;margin:8px 0;padding:10px;border-radius:8px;border:1px solid #ccc;}
     button {background:#2196f3;color:white;font-weight:600;cursor:pointer;transition:0.3s;}
