@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sign Up - Pepper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f7f4f0, #ffffff);
+      background: linear-gradient(135deg, #f7f4f0, #ffffff);
+      height: 100vh; margin: 0; padding: 0;
+      overflow: hidden; text-align: center;
+    }
+    .login-card {
+      background: white; width: 90%; max-width: 450px;
+      margin: 20px auto; padding: 25px; border-radius: 24px;
+      box-shadow: 0 10px 30px rgba(184,154,108,0.15);
+      max-height: 90vh; overflow-y: auto;
+    }
+    h1 { color: #5a4a3b; margin: 0 0 5px 0; font-size: 22px; }
+    p  { color: #8a7b6b; margin: 0 0 15px 0; font-size: 14px; }
+
+    .toggle-container {
+      background: #f0f0f0; border-radius: 50px; height: 45px; width: 100%;
+      margin-bottom: 15px; position: relative;
+    }
+    .toggle-btn {
+      position: absolute; width: 50%; height: 100%; top: 0;
+      border: none; background: transparent;
+      font-weight: bold; color: #8a7b6b; z-index: 2; font-size: 14px;
+    }
+    .toggle-btn.active { color: white; }
+    .toggle-bg {
+      position: absolute; top: 0; left: 0; height: 100%; width: 50%;
+      background: #b89a6c; border-radius: 50px; z-index: 1;
+      transition: left 0.3s;
+    }
+
+    .input-group { margin-bottom: 12px; text-align: left; }
+    label { display: block; font-size: 11px; font-weight: bold; color: #5a4a3b; margin-bottom: 4px; margin-left: 5px; }
+    input {
+      width: 100%; padding: 12px; border-radius: 10px;
+      border: 1px solid #ddd; font-size: 16px; outline: none; background: #fff;
+    }
+    input:focus { border-color: #b89a6c; }
+
+    .btn-submit {
+      width: 100%; padding: 14px; border: none; border-radius: 12px;
+      background: #b89a6c; color: white; font-size: 18px; font-weight: bold;
+      cursor: pointer; margin-top: 5px;
+    }
+    .btn-submit:active   { background: #9e7f54; }
+    .btn-submit:disabled { background: #ccc; }
+
+    .link-text { margin-top: 15px; font-size: 14px; color: #8a7b6b; }
+    .link-text a { color: #b89a6c; font-weight: bold; text-decoration: none; }
+    .error-msg { color: #d9534f; font-weight: bold; margin-top: 10px; display: none; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<div class="login-card">
+  <h1 data-i18n="create_account">Create Account</h1>
+  <p data-i18n="register_new">Register as a new user.</p>
+
+  <div class="toggle-container">
+    <div class="toggle-bg" id="toggleBg"></div>
+    <button class="toggle-btn active" style="left:0"   onclick="setRole('patient')" data-i18n="patient">Patient</button>
+    <button class="toggle-btn"        style="left:50%" onclick="setRole('staff')" data-i18n="staff">Staff</button>
+  </div>
+
+  <div>
+    <div class="input-group">
+      <label data-i18n="full_name">Full Name</label>
+      <input type="text" id="name" placeholder="e.g. John Doe">
+    </div>
+    <div class="input-group">
+      <label data-i18n="login_id">ID Number (Login ID)</label>
+      <input type="tel" id="userId" placeholder="e.g. 105">
+    </div>
+    <div class="input-group">
+      <label data-i18n="create_password">Create Password</label>
+      <input type="password" id="password" placeholder="Enter password">
+    </div>
+    <div class="input-group" id="caseGroup">
+      <label data-i18n="case_number">Patient Case Number (optional)</label>
+      <input type="text" id="caseNumber" placeholder="e.g. CASE-NEW-01">
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+    <button class="btn-submit" id="submitBtn" onclick="signup()" data-i18n="sign_up">Sign Up</button>
+  </div>
+
+  <div class="link-text">
+    <span data-i18n="have_account">Already have an account?</span> <a href="login.html" data-i18n="sign_in">Sign In</a>
+  </div>
+</div>
+
+<script src="i18n.js"></script>
+<script src="demo_store.js"></script>
+<script>
+  var currentRole = 'patient';
+
+  function setRole(role) {
+    currentRole = role;
+    var bg         = document.getElementById('toggleBg');
+    var caseGroup  = document.getElementById('caseGroup');
+    var btns       = document.querySelectorAll('.toggle-btn');
+    if (role === 'staff') {
+      bg.style.left = '50%';
+      if (caseGroup) caseGroup.style.display = 'none';
+      btns[0].className = 'toggle-btn';
+      btns[1].className = 'toggle-btn active';
+    } else {
+      bg.style.left = '0%';
+      if (caseGroup) caseGroup.style.display = 'block';
+      btns[0].className = 'toggle-btn active';
+      btns[1].className = 'toggle-btn';
+    }
+  }
+
+  function showError(msg) {
+    var el = document.getElementById('errorMsg');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'block' : 'none';
+  }
+
+  function signup() {
+    var btn     = document.getElementById('submitBtn');
+    var name    = document.getElementById('name').value;
+    var id      = document.getElementById('userId').value;
+    var pass    = document.getElementById('password').value;
+    var caseNum = document.getElementById('caseNumber').value;
+
+    if (!name || !id || !pass) { showError(I18N.t('fields_required')); return; }
+
+    btn.textContent = I18N.t('creating');
+    btn.disabled = true;
+    showError('');
+
+    if (!window.STORE || !STORE.signup) {
+      btn.disabled = false; btn.textContent = 'Sign Up';
+      showError('Demo store missing.');
+      return;
+    }
+
+    var resp = STORE.signup(currentRole, name, id, pass);
+    btn.disabled = false;
+    btn.textContent = I18N.t('sign_up');
+
+    if (resp && resp.success) {
+      alert(I18N.t('account_created'));
+      window.location.href = 'login.html';
+    } else {
+      showError((resp && resp.error) ? resp.error : 'Signup Failed');
+    }
+  }
+
+  if (window.I18N) I18N.applyI18n();
+</script>
+</body>
+</html>

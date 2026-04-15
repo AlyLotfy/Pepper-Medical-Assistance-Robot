@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sign In - Pepper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f7f4f0, #ffffff);
+      background: linear-gradient(135deg, #f7f4f0, #ffffff);
+      height: 100vh; margin: 0; padding: 0;
+      overflow: hidden; text-align: center;
+    }
+    .login-card {
+      background: white; width: 90%; max-width: 450px;
+      margin: 40px auto; padding: 30px; border-radius: 24px;
+      box-shadow: 0 10px 30px rgba(184,154,108,0.15);
+    }
+    h1 { color: #5a4a3b; margin: 0 0 5px 0; }
+    p  { color: #8a7b6b; margin: 0 0 20px 0; font-size: 14px; }
+
+    .toggle-container {
+      background: #f0f0f0; border-radius: 50px; height: 50px; width: 100%;
+      margin-bottom: 20px; position: relative;
+    }
+    .toggle-btn {
+      position: absolute; width: 50%; height: 100%; top: 0;
+      border: none; background: transparent;
+      font-weight: bold; color: #8a7b6b; z-index: 2; font-size: 16px;
+    }
+    .toggle-btn.active { color: white; }
+    .toggle-bg {
+      position: absolute; top: 0; left: 0; height: 100%; width: 50%;
+      background: #b89a6c; border-radius: 50px; z-index: 1;
+      transition: left 0.3s;
+    }
+
+    .input-group { margin-bottom: 15px; text-align: left; }
+    label { display: block; font-size: 12px; font-weight: bold; color: #5a4a3b; margin-bottom: 5px; margin-left: 5px; }
+    input {
+      width: 100%; padding: 15px; border-radius: 12px;
+      border: 1px solid #ddd; font-size: 16px; outline: none; background: #fff;
+    }
+    input:focus { border-color: #b89a6c; }
+
+    .btn-submit {
+      width: 100%; padding: 15px; border: none; border-radius: 12px;
+      background: #b89a6c; color: white; font-size: 18px; font-weight: bold;
+      cursor: pointer; margin-top: 10px;
+    }
+    .btn-submit:active  { background: #9e7f54; }
+    .btn-submit:disabled{ background: #ccc; }
+
+    .link-text { margin-top: 20px; font-size: 14px; color: #8a7b6b; }
+    .link-text a { color: #b89a6c; font-weight: bold; text-decoration: none; }
+    .error-msg { color: #d9534f; font-weight: bold; margin-top: 10px; display: none; }
+  </style>
+</head>
+<body>
+
+<div class="login-card">
+  <h1 data-i18n="sign_in">Sign In</h1>
+  <p data-i18n="enter_id_pass">Enter your ID and Password.</p>
+
+  <div class="toggle-container">
+    <div class="toggle-bg" id="toggleBg"></div>
+    <button class="toggle-btn active" style="left:0"   onclick="setRole('patient')" data-i18n="patient">Patient</button>
+    <button class="toggle-btn"        style="left:50%" onclick="setRole('staff')" data-i18n="staff">Staff</button>
+  </div>
+
+  <div id="loginForm">
+    <div class="input-group">
+      <label data-i18n="id_number">ID Number</label>
+      <input type="tel" id="userId" placeholder="e.g. 100">
+    </div>
+    <div class="input-group">
+      <label data-i18n="password">Password</label>
+      <input type="password" id="password" placeholder="Enter Password" onkeydown="if(event.keyCode===13) login()">
+    </div>
+    <div class="error-msg" id="errorMsg"></div>
+    <button class="btn-submit" id="submitBtn" onclick="login()" data-i18n="sign_in">Sign In</button>
+  </div>
+
+  <div class="link-text">
+    <a href="signup.html" data-i18n="create_account">Create Account</a>
+  </div>
+  <div style="margin-top:14px;">
+    <a href="face_login.html" style="display:inline-block;padding:12px 24px;background:#f0ebe3;border-radius:12px;color:#5a4a3b;font-size:14px;text-decoration:none;border:1px solid #d5c5b0;">
+      &#128247; Login with Face Recognition
+    </a>
+  </div>
+</div>
+
+<script src="i18n.js"></script>
+<script src="demo_store.js"></script>
+<script>
+  var currentRole = 'patient';
+
+  function setRole(role) {
+    currentRole = role;
+    var bg   = document.getElementById('toggleBg');
+    var btns = document.querySelectorAll('.toggle-btn');
+    if (role === 'staff') {
+      bg.style.left = '50%';
+      btns[0].className = 'toggle-btn';
+      btns[1].className = 'toggle-btn active';
+    } else {
+      bg.style.left = '0%';
+      btns[0].className = 'toggle-btn active';
+      btns[1].className = 'toggle-btn';
+    }
+  }
+
+  function showError(msg) {
+    var el = document.getElementById('errorMsg');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'block' : 'none';
+  }
+
+  function login() {
+    var btn  = document.getElementById('submitBtn');
+    var id   = document.getElementById('userId').value;
+    var pass = document.getElementById('password').value;
+
+    if (!id || !pass) { showError(I18N.t('enter_id_password')); return; }
+
+    btn.textContent = I18N.t('verifying');
+    btn.disabled = true;
+    showError('');
+
+    if (!window.STORE || !STORE.login) {
+      btn.disabled = false; btn.textContent = I18N.t('sign_in');
+      showError('Demo store missing.');
+      return;
+    }
+
+    var resp = STORE.login(currentRole, id, pass);
+
+    if (resp && resp.success) {
+      // Sync Flask session so backend AI endpoints get patient context
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/login', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState === 4) {
+          btn.disabled = false;
+          btn.textContent = I18N.t('sign_in');
+          window.location.href = 'index.html';
+        }
+      };
+      xhr.onerror = function () {
+        btn.disabled = false;
+        btn.textContent = I18N.t('sign_in');
+        window.location.href = 'index.html';
+      };
+      xhr.send(JSON.stringify({ role: currentRole, id: id, password: pass }));
+    } else {
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_in');
+      showError((resp && resp.error) ? resp.error : 'Login Failed');
+    }
+  }
+
+  if (window.I18N) I18N.applyI18n();
+</script>
+</body>
+</html>

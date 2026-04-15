@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>QR Check-In</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    body{
+      font-family:sans-serif;
+      background:-webkit-linear-gradient(315deg,#f7f4f0,#fff);
+      background:linear-gradient(135deg,#f7f4f0,#fff);
+      color:#5a4a3b; margin:0; height:100vh; overflow:hidden;
+      display:-webkit-flex;display:flex;
+      -webkit-align-items:center;align-items:center;
+      -webkit-justify-content:center;justify-content:center;
+    }
+    .container{
+      width:90%;max-width:500px;background:#fff;border-radius:24px;
+      box-shadow:0 10px 30px rgba(184,154,108,.15);padding:30px;text-align:center;
+    }
+    h1{font-size:24px;font-weight:700;margin:0 0 6px 0;color:#5a4a3b}
+    .subtitle{font-size:14px;color:#8a7b6b;margin-bottom:20px}
+    .qr-box{
+      display:inline-block;padding:16px;background:#fff;border:3px solid #b89a6c;border-radius:16px;
+      margin-bottom:16px;
+    }
+    canvas#qrCanvas{display:block}
+    .info{font-size:14px;color:#5a4a3b;margin:6px 0}
+    .info strong{color:#b89a6c}
+    .msg{padding:16px;border-radius:12px;background:#faf7f2;color:#8a7b6b;font-size:15px;margin-top:10px}
+    .back-btn{
+      position:fixed;top:20px;left:20px;
+      width:44px;height:44px;background:#e0e0e0;color:#5a4a3b;
+      border-radius:50%;border:none;font-size:22px;cursor:pointer;
+      display:-webkit-flex;display:flex;
+      -webkit-align-items:center;align-items:center;
+      -webkit-justify-content:center;justify-content:center;
+    }
+    [dir="rtl"] .back-btn{left:auto;right:20px}
+  </style>
+</head>
+<body>
+
+<button class="back-btn" onclick="location.href='index.html'">&#8592;</button>
+
+<div class="container">
+  <h1 data-i18n="qr_title">Quick Check-In</h1>
+  <div class="subtitle" data-i18n="qr_subtitle">Show this QR code at reception for fast check-in.</div>
+
+  <div id="qrContent"></div>
+</div>
+
+<script src="i18n.js"></script>
+<script src="demo_store.js"></script>
+<script>
+/* Minimal QR-like visual code generator using Canvas.
+   This creates a unique visual pattern from patient data
+   that can be scanned or visually verified at reception. */
+
+function generatePatternCode(text) {
+  var canvas = document.createElement('canvas');
+  canvas.id = 'qrCanvas';
+  var size = 200;
+  var cells = 15;
+  var cellSize = Math.floor(size / cells);
+  canvas.width = cellSize * cells;
+  canvas.height = cellSize * cells;
+  var ctx = canvas.getContext('2d');
+
+  /* White background */
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  /* Simple hash to create deterministic pattern */
+  var hash = 0;
+  for (var i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+    hash = hash & hash;
+  }
+
+  /* Draw finder patterns (corners) - like real QR */
+  function drawFinder(ox, oy) {
+    ctx.fillStyle = '#5a4a3b';
+    for (var r = 0; r < 7; r++) {
+      for (var c = 0; c < 7; c++) {
+        var fill = (r === 0 || r === 6 || c === 0 || c === 6 ||
+                   (r >= 2 && r <= 4 && c >= 2 && c <= 4));
+        if (fill) {
+          ctx.fillRect((ox + c) * cellSize, (oy + r) * cellSize, cellSize, cellSize);
+        }
+      }
+    }
+  }
+  drawFinder(0, 0);
+  drawFinder(cells - 7, 0);
+  drawFinder(0, cells - 7);
+
+  /* Data pattern from hash */
+  var seed = Math.abs(hash);
+  for (var row = 0; row < cells; row++) {
+    for (var col = 0; col < cells; col++) {
+      /* Skip finder pattern areas */
+      if ((row < 8 && col < 8) || (row < 8 && col > cells - 9) || (row > cells - 9 && col < 8)) continue;
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      if (seed % 3 === 0) {
+        ctx.fillStyle = '#5a4a3b';
+        ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  return canvas;
+}
+
+window.onload = function () {
+  if (window.I18N) I18N.applyI18n();
+
+  var container = document.getElementById('qrContent');
+  if (!container) return;
+
+  var me = null;
+  try {
+    if (window.STORE && STORE.me) me = STORE.me();
+  } catch (e) {}
+
+  if (!me || !me.id) {
+    container.innerHTML = '<div class="msg" data-i18n="qr_not_logged_in">' + I18N.t('qr_not_logged_in') + '</div>';
+    return;
+  }
+
+  /* QR data string */
+  var qrData = 'PEPPER-CHECKIN|ID:' + me.id + '|NAME:' + me.name + '|CASE:' + (me.case_number || 'N/A') + '|T:' + Date.now();
+
+  /* Generate visual code */
+  var qrBox = document.createElement('div');
+  qrBox.className = 'qr-box';
+  var canvas = generatePatternCode(qrData);
+  qrBox.appendChild(canvas);
+  container.appendChild(qrBox);
+
+  /* Patient info */
+  container.innerHTML += '<div class="info"><strong>' + I18N.t('qr_patient_id', me.id) + '</strong></div>';
+  container.innerHTML += '<div class="info">' + I18N.t('qr_name', me.name) + '</div>';
+  if (me.case_number) {
+    container.innerHTML += '<div class="info">' + I18N.t('qr_case', me.case_number) + '</div>';
+  }
+};
+</script>
+</body>
+</html>

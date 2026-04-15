@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pepper Medical Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <!-- Google Fonts removed: Pepper tablet has no internet access, the blocking
+       request causes a white page until timeout. Fall back to system sans-serif. -->
+  <!-- Safety: if JS fails to load within 10s, auto-reload once -->
+  <noscript><meta http-equiv="refresh" content="8"></noscript>
+
+  <style>
+    /* --- GLOBAL RESET --- */
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f9f7f5, #ffffff);
+      background:         linear-gradient(135deg, #f9f7f5, #ffffff);
+      color: #5a4a3b;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      overflow: hidden;
+    }
+
+    /* --- SCREEN CONTAINER --- */
+    .screen { width: 100vw; height: 100vh; padding: 20px; display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; }
+
+    /* --- HEADER --- */
+    header { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: space-between; justify-content: space-between; height: 80px; -webkit-flex-shrink: 0; flex-shrink: 0; margin-bottom: 10px; }
+    .brand-container { display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; -webkit-justify-content: center; justify-content: center; }
+    .title { margin: 0; font-weight: 600; font-size: 28px; line-height: 1.1; color: #5a4a3b; }
+    .subtitle { margin: 4px 0 0 0; color: #8a7b6b; font-size: 16px; }
+
+    .voice-btn { background: #b89a6c; color: white; border: none; height: 55px; padding: 0 40px; border-radius: 30px; font-size: 18px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(184, 154, 108, 0.3); }
+
+    .auth-container { display: -webkit-flex; display: flex; gap: 12px; -webkit-align-items: center; align-items: center; }
+    .auth-btn { background: #fff; color: #b89a6c; border: 2px solid #b89a6c; padding: 10px 24px; border-radius: 50px; font-weight: 600; text-decoration: none; font-size: 15px; display: inline-block; cursor: pointer; }
+    .auth-btn.primary { background: #b89a6c; color: white; border: none; }
+
+    /* --- LANG TOGGLE --- */
+    .lang-btn { background: #fff; color: #b89a6c; border: 2px solid #b89a6c; padding: 8px 18px; border-radius: 50px; font-weight: 700; font-size: 15px; cursor: pointer; margin: 0 6px; }
+
+    /* --- PANEL --- */
+    .panel { -webkit-flex: 1; flex: 1; background: #ffffff; border-radius: 24px; box-shadow: 0 15px 35px rgba(0,0,0,0.05); padding: 15px; display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; position: relative; }
+    .tiles-container { -webkit-flex: 1; flex: 1; width: 100%; display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-align-content: center; align-content: center; -webkit-justify-content: center; justify-content: center; height: 100%; }
+
+    /* --- TILES --- */
+    .tile { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; text-align: center; text-decoration: none; color: #fff; font-weight: 600; border-radius: 16px; box-shadow: 0 8px 20px rgba(184,154,108,.20); font-size: 26px; line-height: 1.2; height: 28vh; width: 47%; margin: 1%; opacity: 1; -webkit-transform: translateY(0); transform: translateY(0); -webkit-transition: -webkit-transform .25s ease, box-shadow .25s ease, opacity .4s ease; transition: transform .25s ease, box-shadow .25s ease, opacity .4s ease; }
+    .tile.animate-in { opacity: 0; -webkit-transform: translateY(10px); transform: translateY(10px); }
+    .tile.show { opacity: 1; -webkit-transform: translateY(0); transform: translateY(0); }
+    .tile:active { -webkit-transform: scale(0.98); transform: scale(0.98); }
+    .tile.--primary { background: #b89a6c; }
+
+    /* --- HIGHLIGHT BADGE (new appointments) --- */
+    .highlight { position: relative; box-shadow: 0 0 25px rgba(184,154,108,0.7); border: 3px solid #b89a6c; -webkit-animation: tilePulse 1.6s ease-in-out infinite; animation: tilePulse 1.6s ease-in-out infinite; }
+    .highlight::after { content: "NEW"; position: absolute; top: 12px; right: 16px; background: #d9534f; color: white; font-size: 14px; font-weight: bold; padding: 6px 10px; border-radius: 999px; }
+    [dir="rtl"] .highlight::after { content: "\062C\062F\064A\062F"; right: auto; left: 16px; }
+    @-webkit-keyframes tilePulse { 0% { -webkit-transform: scale(1); transform: scale(1); } 50% { -webkit-transform: scale(1.04); transform: scale(1.04); } 100% { -webkit-transform: scale(1); transform: scale(1); } }
+    @keyframes tilePulse { 0% { -webkit-transform: scale(1); transform: scale(1); } 50% { -webkit-transform: scale(1.04); transform: scale(1.04); } 100% { -webkit-transform: scale(1); transform: scale(1); } }
+
+    /* --- PAGINATION --- */
+    .pagination-bar { height: 60px; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: space-between; justify-content: space-between; padding: 0 10px; -webkit-flex-shrink: 0; flex-shrink: 0; }
+    .nav-arrow { background: transparent; border: 2px solid #b89a6c; color: #b89a6c; width: 50px; height: 50px; border-radius: 50%; font-size: 24px; cursor: pointer; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+    .nav-arrow:disabled { opacity: 0.2; border-color: #ddd; color: #ddd; }
+    .page-indicator { color: #b89a6c; font-weight: 600; font-size: 16px; opacity: 0.8; }
+    .footer { color: #aaa; text-align: center; font-size: 13px; margin-top: 5px; flex-shrink: 0; }
+
+    /* --- VOICE OVERLAY --- */
+    #voice-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.98); z-index: 1000; display: none; -webkit-flex-direction: column; flex-direction: column; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; text-align: center; padding: 40px; }
+    #voice-overlay.active { display: -webkit-flex; display: flex; }
+    .voice-status { font-size: 28px; color: #b89a6c; margin-bottom: 20px; font-weight: 600; }
+    .voice-text-display { font-size: 24px; color: #5a4a3b; font-weight: 500; margin-bottom: 40px; max-width: 80%; min-height: 100px; line-height: 1.4; }
+    .close-voice-btn { position: absolute; top: 30px; right: 30px; background: transparent; border: 2px solid #b89a6c; color: #b89a6c; width: 50px; height: 50px; border-radius: 50%; font-size: 24px; cursor: pointer; }
+    .mic-btn { background: #b89a6c; color: white; border: none; padding: 20px 60px; font-size: 24px; border-radius: 50px; cursor: pointer; box-shadow: 0 5px 15px rgba(0,0,0,0.2); transition: background 0.3s; }
+
+    /* --- DEBUG BOX --- */
+    #debug-box { position: fixed; bottom: 0; left: 0; width: 100%; background: red; color: white; padding: 5px; font-size: 10px; z-index: 9999; display: none; }
+  </style>
+</head>
+<body>
+
+  <div id="debug-box"></div>
+
+  <div id="voice-overlay">
+    <button class="close-voice-btn" onclick="closeVoiceMode()">&#215;</button>
+    <div class="voice-status" id="voiceStatus" data-i18n="initializing">Initializing...</div>
+    <div class="voice-text-display" id="voiceDisplay" data-i18n="voice_greeting">Hello, I'm Pepper. Tap below to chat.</div>
+    <button class="mic-btn" id="micBtn" onclick="triggerRobotMic()" data-i18n="tap_to_speak">Tap to Speak</button>
+  </div>
+
+  <div class="screen">
+    <header>
+      <div class="brand-container">
+        <h1 class="title" data-i18n="hello_pepper">Hello, I am Pepper</h1>
+        <p class="subtitle" data-i18n="your_medical_guide">Your medical guide.</p>
+      </div>
+
+      <button class="voice-btn" id="startVoiceBtn" data-i18n="tap_to_speak">Tap to Speak</button>
+
+      <div style="display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;">
+        <div class="auth-container" id="authContainer">
+           <a href="login.html" class="auth-btn" data-i18n="sign_in">Sign In</a>
+           <a href="signup.html" class="auth-btn primary" data-i18n="sign_up">Sign Up</a>
+        </div>
+        <button class="lang-btn" id="langToggle" onclick="I18N.toggleLang()">عربي</button>
+      </div>
+    </header>
+
+    <main class="panel">
+      <div class="tiles-container">
+        <a class="tile --primary" href="book.html"><span data-i18n="book_appointment">Book Appointment</span></a>
+        <a class="tile --primary" href="schedule.html"><span data-i18n="check_schedule">Check Schedule</span></a>
+        <a class="tile --primary" id="tileAppointments" href="appointments.html"><span data-i18n="my_appointments">My Appointments</span></a>
+        <a class="tile --primary" href="emergency.html"><span data-i18n="emergency">Emergency</span></a>
+
+        <a class="tile --primary" href="guide.html"><span data-i18n="guide_to_room">Guide to Room</span></a>
+        <a class="tile --primary" href="tips.html"><span data-i18n="health_tips">Health Tips</span></a>
+        <a class="tile --primary" href="chat.html"><span data-i18n="chat_faq">Chat / FAQ</span></a>
+        <a class="tile --primary" href="triage.html"><span data-i18n="symptom_check">Symptom Check</span></a>
+
+        <a class="tile --primary" href="qr_checkin.html"><span data-i18n="qr_checkin">QR Check-In</span></a>
+        <a class="tile --primary" href="about.html"><span data-i18n="about">About</span></a>
+        <a class="tile --primary" id="tileFaceId" href="face_enroll.html"><span>&#128247; Link Face ID</span></a>
+      </div>
+
+      <div class="pagination-bar">
+          <button class="nav-arrow" id="prevBtn" onclick="changePage(-1)">&#8592;</button>
+          <span class="page-indicator" id="pageIndicator">Page 1 / 2</span>
+          <button class="nav-arrow" id="nextBtn" onclick="changePage(1)">&#8594;</button>
+      </div>
+    </main>
+
+    <div class="footer" data-i18n="footer">Andalusia Hospital &mdash; Powered by Pepper</div>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="demo_store.js"></script>
+  <script>
+  // ERROR HANDLER
+  window.onerror = function(msg, url, line) {
+     var d = document.getElementById('debug-box');
+     if (d) { d.style.display = 'block'; d.innerHTML += "ERR: " + msg + " line " + line + "<br>"; }
+  };
+
+  // --- 1. PAGINATION ---
+  var currentPage = 0;
+  var itemsPerPage = 4;
+  var tiles = [];
+  var totalPages = 0;
+
+  function renderTiles() {
+      var start = currentPage * itemsPerPage;
+      var end   = start + itemsPerPage;
+      tiles      = document.querySelectorAll('.tile');
+      totalPages = Math.ceil(tiles.length / itemsPerPage);
+
+      for (var i = 0; i < tiles.length; i++) {
+          tiles[i].style.display = (i >= start && i < end) ? 'flex' : 'none';
+      }
+
+      var prevBtn = document.getElementById('prevBtn');
+      var nextBtn = document.getElementById('nextBtn');
+      var pageInd = document.getElementById('pageIndicator');
+      if (prevBtn) prevBtn.disabled = (currentPage === 0);
+      if (nextBtn) nextBtn.disabled = (currentPage >= totalPages - 1);
+      if (pageInd) pageInd.textContent = I18N.t("page_x_of_y", currentPage + 1, totalPages || 1);
+  }
+
+  function changePage(direction) {
+      var newPage = currentPage + direction;
+      if (newPage >= 0 && newPage < totalPages) { currentPage = newPage; renderTiles(); }
+  }
+
+  function animateTilesIn() {
+    var t = document.querySelectorAll('.tile');
+    /* First hide them for the animation, then reveal with staggered delay */
+    for (var i = 0; i < t.length; i++) { t[i].className += " animate-in"; }
+    /* Force reflow so the browser registers the hidden state before animating */
+    void document.body.offsetHeight;
+    for (var i = 0; i < t.length; i++) {
+      (function(el, delay){ setTimeout(function(){ el.className += " show"; }, delay); })(t[i], i * 60);
+    }
+  }
+
+  // --- 2. AUTH (via STORE) ---
+  function checkLoginStatus() {
+    var container = document.getElementById('authContainer');
+    if (!container) return;
+    try {
+      var me = (window.STORE && STORE.me) ? STORE.me() : null;
+      if (me && me.name) {
+        var extraBtn = '';
+        if (me.role === 'staff') {
+          extraBtn = '<a href="staff_dashboard.html" class="auth-btn" style="margin-right:8px;">' + I18N.t("staff_dashboard") + '</a>';
+        } else if (me.role === 'patient') {
+          extraBtn = '<a href="face_enroll.html" class="auth-btn" style="margin-right:8px;" title="Link your face for auto-login">&#128247; Face ID</a>';
+        }
+        container.innerHTML =
+          '<span style="margin-right:10px; font-weight:600; color:#5a4a3b;">' + I18N.t("hello_user") + me.name + '</span>' +
+          extraBtn +
+          '<button class="auth-btn" onclick="logoutUser()">' + I18N.t("logout") + '</button>';
+      } else {
+        var faceIdTile = document.getElementById('tileFaceId');
+        if (faceIdTile) faceIdTile.parentNode.removeChild(faceIdTile);
+        container.innerHTML =
+          '<a href="login.html" class="auth-btn">' + I18N.t("sign_in") + '</a>' +
+          '<a href="signup.html" class="auth-btn primary">' + I18N.t("sign_up") + '</a>';
+      }
+    } catch (e) {
+      var faceIdTile = document.getElementById('tileFaceId');
+      if (faceIdTile) faceIdTile.parentNode.removeChild(faceIdTile);
+      container.innerHTML =
+        '<a href="login.html" class="auth-btn">' + I18N.t("sign_in") + '</a>' +
+        '<a href="signup.html" class="auth-btn primary">' + I18N.t("sign_up") + '</a>';
+    }
+  }
+
+  function logoutUser() {
+    try { if (window.STORE && STORE.logout) STORE.logout(); } catch (e) {}
+    window.location.reload();
+  }
+
+  function updateAppointmentsHighlight() {
+    try {
+      var me   = (window.STORE && STORE.me) ? STORE.me() : null;
+      var tile = document.getElementById('tileAppointments');
+      if (!tile || !me || !me.id) return;
+      if (localStorage.getItem('hasNewAppointments_' + me.id) === '1') {
+        tile.className += ' highlight';
+      }
+    } catch (e) {}
+  }
+
+  // --- 3. VOICE & WEBSOCKET ---
+  var ws;
+  var isRecording = false;
+
+  function connectWebSocket() {
+    try {
+      var host = window.location.hostname || '127.0.0.1';
+      ws = new WebSocket('ws://' + host + ':8765');
+
+      ws.onopen = function () {
+        var vs = document.getElementById('voiceStatus');
+        if (vs) vs.textContent = I18N.t('ready');
+      };
+
+      ws.onmessage = function (event) {
+        try {
+          var msg = JSON.parse(event.data);
+          if (msg.type === 'result') {
+            var display = document.getElementById('voiceDisplay');
+            if (display) {
+              display.innerHTML =
+                "<div style='font-size:20px;color:#999;margin-bottom:5px;'>You: \"" + msg.user_text + "\"</div>" +
+                "<div style='font-size:26px;color:#5a4a3b;font-weight:600;'>Pepper: \"" + msg.ai_text + "\"</div>";
+            }
+            var vs2 = document.getElementById('voiceStatus');
+            if (vs2) vs2.textContent = I18N.t('ready');
+            resetMicButton();
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = function () { setTimeout(connectWebSocket, 3000); };
+    } catch (e) {}
+  }
+
+  window.triggerRobotMic = function () {
+    var btn     = document.getElementById('micBtn');
+    var status  = document.getElementById('voiceStatus');
+    var display = document.getElementById('voiceDisplay');
+
+    // If WebSocket not connected, show waiting message
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (status)  status.textContent = I18N.t('connecting');
+      if (display) display.innerHTML  = '<i>' + I18N.t('waiting_robot') + '</i>';
+      return;
+    }
+
+    if (!isRecording) {
+      ws.send(JSON.stringify({ type: 'start_recording', lang: I18N.getLang() }));
+      isRecording = true;
+      if (btn)     { btn.textContent = I18N.t('stop_recording'); btn.style.background = '#d9534f'; }
+      if (status)  status.textContent = I18N.t('listening');
+      if (display) display.innerHTML  = '<i>' + I18N.t('listening_to_you') + '</i>';
+    } else {
+      ws.send(JSON.stringify({ type: 'stop_recording' }));
+      isRecording = false;
+      if (btn)     { btn.textContent = I18N.t('processing'); btn.style.background = '#f0ad4e'; }
+      if (status)  status.textContent = I18N.t('thinking');
+      if (display) display.innerHTML  = '<i>' + I18N.t('thinking_dots') + '</i>';
+    }
+  };
+
+  function resetMicButton() {
+    var btn = document.getElementById('micBtn');
+    if (btn) { isRecording = false; btn.textContent = I18N.t('tap_to_speak'); btn.style.background = '#b89a6c'; }
+  }
+
+  window.closeVoiceMode = function () {
+    var overlay = document.getElementById('voice-overlay');
+    if (overlay) overlay.className = overlay.className.replace(/\s*active/g, '');
+    resetMicButton();
+  };
+
+  // --- 4. INITIALIZATION ---
+  window.onload = function () {
+    /* apply saved language */
+    I18N.applyI18n();
+    var langBtn = document.getElementById('langToggle');
+    if (langBtn) langBtn.textContent = (I18N.getLang() === 'en') ? '\u0639\u0631\u0628\u064a' : 'English';
+
+    setTimeout(function () {
+      checkLoginStatus();
+      updateAppointmentsHighlight();
+      renderTiles();
+      animateTilesIn();
+    }, 100);
+
+    connectWebSocket();
+
+    var btn     = document.getElementById('startVoiceBtn');
+    var overlay = document.getElementById('voice-overlay');
+    if (btn && overlay) {
+      btn.onclick = function () {
+        overlay.className = overlay.className + ' active';
+        var vs = document.getElementById('voiceStatus');
+        var vd = document.getElementById('voiceDisplay');
+        if (vs) vs.textContent = (ws && ws.readyState === WebSocket.OPEN) ? I18N.t('ready') : I18N.t('connecting');
+        if (vd) vd.textContent = I18N.t('voice_greeting');
+        resetMicButton();
+      };
+    }
+
+    /* Re-render dynamic content when language is toggled */
+    window.onLangChange = function () {
+      checkLoginStatus();
+      renderTiles();
+    };
+
+    /* Proactive appointment reminder via WebSocket TTS */
+    setTimeout(function () { checkAppointmentReminder(); }, 2000);
+
+    /* Safety: if tiles are still invisible after 8s, force one reload */
+    setTimeout(function () {
+      var t = document.querySelectorAll('.tile');
+      var anyVisible = false;
+      for (var i = 0; i < t.length; i++) {
+        if (t[i].offsetHeight > 0 && t[i].style.display !== 'none' && getComputedStyle(t[i]).opacity !== '0') {
+          anyVisible = true; break;
+        }
+      }
+      if (!anyVisible && !sessionStorage.getItem('pepper_reloaded')) {
+        sessionStorage.setItem('pepper_reloaded', '1');
+        window.location.reload();
+      }
+    }, 8000);
+  };
+
+  function checkAppointmentReminder() {
+    try {
+      var me = (window.STORE && STORE.me) ? STORE.me() : null;
+      if (!me || !me.id) return;
+      var appts = (STORE.myAppointments) ? STORE.myAppointments() : null;
+      if (!appts || !appts.success || !appts.appointments || !appts.appointments.length) return;
+
+      var today = new Date();
+      var todayStr = today.getFullYear() + '-' +
+        ('0' + (today.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + today.getDate()).slice(-2);
+
+      /* Find appointments today or tomorrow */
+      var tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      var tomorrowStr = tomorrow.getFullYear() + '-' +
+        ('0' + (tomorrow.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + tomorrow.getDate()).slice(-2);
+
+      var reminderKey = 'pepper_reminder_shown_' + me.id + '_' + todayStr;
+      if (localStorage.getItem(reminderKey)) return;
+
+      for (var i = 0; i < appts.appointments.length; i++) {
+        var apt = appts.appointments[i];
+        if (apt.date === todayStr || apt.date === tomorrowStr) {
+          var reminderText = I18N.t('reminder_upcoming', apt.doctor, apt.date, apt.time);
+          /* Send reminder via WebSocket to trigger Pepper TTS */
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'tts_speak',
+              text: reminderText,
+              lang: I18N.getLang()
+            }));
+          }
+          localStorage.setItem(reminderKey, '1');
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+  </script>
+
+</body>
+</html>

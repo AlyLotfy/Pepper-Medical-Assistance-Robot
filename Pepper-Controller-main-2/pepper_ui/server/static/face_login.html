@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Face Login - Pepper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f7f4f0; display: -webkit-flex; display: flex;
+           align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: white; border-radius: 24px; padding: 30px; width: 90%; max-width: 460px;
+            box-shadow: 0 10px 30px rgba(184,154,108,0.15); text-align: center; }
+    h1 { color: #5a4a3b; margin-bottom: 6px; }
+    p  { color: #8a7b6b; font-size: 14px; margin-bottom: 20px; }
+    #video-container { position: relative; border-radius: 16px; overflow: hidden;
+                       background: #222; margin-bottom: 16px; }
+    video { width: 100%; border-radius: 16px; display: block; }
+    .overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+               width: 200px; height: 200px; border: 3px solid #b89a6c;
+               border-radius: 50%; pointer-events: none; }
+    .btn { width: 100%; padding: 15px; border: none; border-radius: 12px;
+           background: #b89a6c; color: white; font-size: 18px; font-weight: bold;
+           cursor: pointer; margin-top: 10px; }
+    .btn:disabled { background: #ccc; }
+    .btn-secondary { background: #e0e0e0; color: #5a4a3b; font-size: 15px; padding: 12px; margin-top: 8px; }
+    .status { margin-top: 14px; font-size: 14px; min-height: 40px; }
+    .status.success { color: #2d6a2d; font-weight: bold; }
+    .status.error   { color: #d9534f; }
+    .status.info    { color: #5a4a3b; }
+    canvas { display: none; }
+    .back-link { display: block; margin-top: 16px; color: #b89a6c; font-size: 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>&#128247; Face Login</h1>
+  <p>Look at the camera and click the button below</p>
+
+  <div id="video-container">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="overlay"></div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <button class="btn" id="captureBtn" onclick="capture()">Scan My Face</button>
+  <button class="btn btn-secondary" onclick="window.location.href='login.html'">&#8592; Back to Login</button>
+
+  <div class="status info" id="status">Starting camera...</div>
+</div>
+
+<script src="demo_store.js"></script>
+<script>
+  var video  = document.getElementById('video');
+  var canvas = document.getElementById('canvas');
+  var status = document.getElementById('status');
+  var btn    = document.getElementById('captureBtn');
+
+  // Stream from Pepper's camera via server endpoint (no HTTPS needed)
+  var streamInterval = null;
+  var lastFrameUrl = null;
+
+  function startStream() {
+    status.textContent = 'Connecting to Pepper camera...';
+    streamInterval = setInterval(function() {
+      var img = new Image();
+      img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        video.poster = img.src;
+        video.style.display = 'none';
+        // Show canvas instead of video
+        canvas.style.display = 'block';
+        canvas.style.width = '100%';
+        canvas.style.borderRadius = '16px';
+        status.textContent = 'Camera ready. Position your face in the circle.';
+        status.className = 'status info';
+      };
+      img.onerror = function() {
+        status.className = 'status error';
+        status.textContent = 'Camera unavailable. Retrying...';
+      };
+      img.src = '/api/camera/snapshot?t=' + Date.now();
+    }, 500); // ~2 fps
+  }
+  startStream();
+
+  function capture() {
+    btn.disabled = true;
+    status.className = 'status info';
+    status.textContent = 'Scanning face...';
+
+    // Grab a fresh frame as base64 from the server
+    var xhr2 = new XMLHttpRequest();
+    xhr2.open('GET', '/api/camera/snapshot_b64', true);
+    xhr2.timeout = 10000;
+    xhr2.onreadystatechange = function() {
+      if (xhr2.readyState !== 4) return;
+      try {
+        var snap = JSON.parse(xhr2.responseText);
+        if (snap.error) {
+          status.className = 'status error';
+          status.textContent = 'Camera error: ' + snap.error;
+          btn.disabled = false;
+          return;
+        }
+        var imageData = snap.data_url;
+        sendFaceLogin(imageData);
+      } catch(e) {
+        status.className = 'status error';
+        status.textContent = 'Camera error. Try again.';
+        btn.disabled = false;
+      }
+    };
+    xhr2.send();
+  }
+
+  function sendFaceLogin(imageData) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/face_login', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.timeout = 15000;
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      btn.disabled = false;
+      try {
+        var data = JSON.parse(xhr.responseText);
+        if (data.success) {
+          if (streamInterval) clearInterval(streamInterval);
+          status.className = 'status success';
+          status.textContent = 'Welcome, ' + data.name + '! Logging you in...';
+          if (window.STORE && STORE.loginByName) {
+            STORE.loginByName(data.name);
+          }
+          setTimeout(function() { window.location.href = 'index.html'; }, 1200);
+        } else {
+          status.className = 'status error';
+          status.textContent = data.error || 'Face not recognized. Please try again.';
+        }
+      } catch(e) {
+        status.className = 'status error';
+        status.textContent = 'Server error. Try again.';
+      }
+    };
+    xhr.ontimeout = function() {
+      btn.disabled = false;
+      status.className = 'status error';
+      status.textContent = 'Request timed out. Please try again.';
+    };
+    xhr.send(JSON.stringify({image: imageData}));
+  }
+</script>
+</body>
+</html>

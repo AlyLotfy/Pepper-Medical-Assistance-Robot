@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Personalized Health Tips</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f7f4f0;
+      color: #5a4a3b;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      padding: 20px; margin: 0;
+    }
+    .header {
+      width: 100%; max-width: 650px;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      margin-bottom: 10px;
+    }
+    .back-btn {
+      background: #e0e0e0; border: none; border-radius: 50%;
+      width: 45px; height: 45px; font-size: 22px; cursor: pointer;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      margin-right: 15px; color: #5a4a3b;
+    }
+    h1 { font-size: 24px; margin: 0; font-weight: 600; }
+    .subtitle { font-size: 15px; color: #888; margin-left: 60px; margin-bottom: 25px; width: 100%; max-width: 650px; }
+
+    .grid {
+      display: -webkit-flex; display: flex;
+      -webkit-flex-wrap: wrap; flex-wrap: wrap;
+      -webkit-justify-content: center; justify-content: center;
+      width: 100%; max-width: 700px;
+    }
+    .tip-card {
+      background: white;
+      width: 46%; margin: 2%;
+      padding: 20px; border-radius: 18px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+      text-align: center;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      min-height: 180px;
+    }
+    .icon { font-size: 35px; margin-bottom: 10px; }
+    h3 { margin: 0 0 8px 0; font-size: 17px; color: #b89a6c; font-weight: 600; }
+    p { font-size: 13px; color: #666; line-height: 1.4; margin: 0; }
+
+    .loading-container { text-align: center; margin-top: 50px; color: #b89a6c; }
+    .spinner { font-size: 40px; -webkit-animation: spin 1s infinite linear; animation: spin 1s infinite linear; display: inline-block; margin-bottom: 10px; }
+    @-webkit-keyframes spin { 100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); } }
+    @keyframes spin { 100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); } }
+    .error-msg { background: #ffe6e6; color: #d9534f; padding: 15px; border-radius: 10px; width: 100%; text-align: center; }
+    [dir="rtl"] .back-btn { margin-right: 0; margin-left: 15px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <button class="back-btn" onclick="location.href='index.html'">&#8592;</button>
+    <h1 data-i18n="health_tips">Health Tips</h1>
+  </div>
+  <div class="subtitle" id="userSubtitle" data-i18n="tips_subtitle">Personalized AI recommendations for you...</div>
+
+  <div id="loading" class="loading-container">
+    <div class="spinner">&#9881;&#65039;</div>
+    <p>Generating personalized tips based on your case...</p>
+  </div>
+
+  <div class="grid" id="tipsGrid" style="display: none;"></div>
+
+  <script src="i18n.js"></script>
+  <script src="ui_data.js"></script>
+  <script src="demo_store.js"></script>
+
+  <script>
+  window.onload = function () { if (window.I18N) I18N.applyI18n(); fetchAITips(); };
+
+  function getPatientName() {
+    try {
+      if (window.STORE && STORE.me) {
+        var me = STORE.me();
+        if (me && me.name) return me.name;
+      }
+    } catch (e) {}
+    return 'Guest';
+  }
+
+  function showTipsGrid(tips, patientName) {
+    var loadingDiv = document.getElementById('loading');
+    var gridDiv    = document.getElementById('tipsGrid');
+    var subtitle   = document.getElementById('userSubtitle');
+
+    if (loadingDiv) loadingDiv.style.display = 'none';
+    if (!gridDiv) return;
+    if (subtitle) subtitle.textContent = I18N.t('recommended_for', patientName);
+
+    gridDiv.innerHTML = '';
+    for (var i = 0; i < tips.length; i++) {
+      var tip  = tips[i];
+      var card = document.createElement('div');
+      card.className = 'tip-card';
+      card.innerHTML =
+        '<div class="icon">'  + (tip.icon  || '') + '</div>' +
+        '<h3>'                + (tip.title || 'Health Tip') + '</h3>' +
+        '<p>'                 + (tip.text  || '') + '</p>';
+      gridDiv.appendChild(card);
+    }
+    gridDiv.style.display = 'flex';
+  }
+
+  function fallbackToLocalTips() {
+    var name = getPatientName();
+    if (window.UI_DATA && UI_DATA.tips && UI_DATA.tips.length > 0) {
+      showTipsGrid(UI_DATA.tips, name);
+    } else {
+      var gridDiv = document.getElementById('tipsGrid');
+      var loadingDiv = document.getElementById('loading');
+      if (loadingDiv) loadingDiv.style.display = 'none';
+      if (gridDiv) {
+        gridDiv.innerHTML = '<div class="error-msg">Tips data missing.</div>';
+        gridDiv.style.display = 'block';
+      }
+    }
+  }
+
+  function fetchAITips() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/ai_health_tips', true);
+    xhr.timeout = 8000;
+
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState === 4) {
+        if (xhr.status === 200) {
+          try {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success && data.tips && data.tips.length > 0) {
+              showTipsGrid(data.tips, data.patient_name || getPatientName());
+              return;
+            }
+          } catch (e) {}
+        }
+        fallbackToLocalTips();
+      }
+    };
+
+    xhr.ontimeout = function () { fallbackToLocalTips(); };
+
+    try {
+      xhr.send();
+    } catch (e) {
+      fallbackToLocalTips();
+    }
+  }
+  </script>
+</body>
+</html>

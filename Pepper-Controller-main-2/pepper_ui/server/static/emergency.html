@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Emergency Help</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+    html,body{height:100%; margin:0;}
+    body{
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #ffe9ec, #ffffff);
+      background: linear-gradient(135deg, #ffe9ec, #ffffff);
+      color: #0b2a4a;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      overflow: hidden;
+    }
+    .card{
+      width: 90%; max-width: 600px;
+      background: #fff; border-radius: 24px;
+      box-shadow: 0 12px 28px rgba(9,41,78,.12);
+      padding: 30px; text-align: center;
+    }
+    .title{ margin: 0 0 12px 0; font-weight: 600; font-size: 32px; color: #c62828; }
+    .subtitle{ margin: 0 0 22px 0; color: #5a6f85; font-size: 16px; }
+
+    .btn{
+      width: 100%; height: 80px; border: none; border-radius: 14px; cursor: pointer;
+      font-weight: 800; font-size: 24px; color: #fff;
+      background: #c62828;
+      box-shadow: 0 10px 22px rgba(198,40,40,.28);
+      position: relative; overflow: hidden;
+    }
+
+    .holdbar{
+      position: absolute; left: 0; bottom: 0; height: 6px; width: 0%;
+      background: #ffd3d3;
+      -webkit-transition: width 0.1s linear;
+      transition: width 0.1s linear;
+    }
+
+    .hint{ margin-top: 15px; color: #a33; font-weight: 600; font-size: 14px; }
+    .link{ display: block; margin-top: 20px; color: #b89a6c; text-decoration: none; font-weight: 600; cursor: pointer; }
+
+    #statusMsg{ margin-top: 18px; font-size: 16px; font-weight: 600; min-height: 24px; }
+
+    [dir="rtl"] .link { direction: rtl; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 class="title">&#128680; Emergency Help</h1>
+    <p class="subtitle" data-i18n="emergency_subtitle">If you are in a medical emergency, press and hold to notify the team.</p>
+
+    <button class="btn" id="panicBtn">
+      CALL EMERGENCY
+      <div class="holdbar" id="holdbar"></div>
+    </button>
+    <div class="hint" data-i18n="hold_2_sec">Press &amp; hold for 2 seconds</div>
+    <div id="statusMsg"></div>
+
+    <a class="link" href="index.html" data-i18n="back_to_home">&#8592; Back to Home</a>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="demo_store.js"></script>
+  <script>
+    // WebSocket for robot voice alert
+    var ws = null;
+    try {
+      ws = new WebSocket('ws://' + (window.location.hostname || '198.18.0.1') + ':8765');
+    } catch(e) {}
+
+    var btn   = document.getElementById('panicBtn');
+    var bar   = document.getElementById('holdbar');
+    var sMsgEl = document.getElementById('statusMsg');
+    var timer = null;
+
+    function startHold() {
+      bar.style.webkitTransition = 'width 2s linear';
+      bar.style.transition = 'width 2s linear';
+      bar.style.width = '100%';
+      timer = setTimeout(triggerEmergency, 2000);
+    }
+
+    function cancelHold() {
+      clearTimeout(timer);
+      bar.style.webkitTransition = 'width 0.2s';
+      bar.style.transition = 'width 0.2s';
+      bar.style.width = '0%';
+    }
+
+    function triggerEmergency() {
+      // Update UI
+      btn.style.background = '#2e7d32';
+      btn.childNodes[0].nodeValue = I18N.t('help_sent') + ' ';
+      if (sMsgEl) sMsgEl.textContent = I18N.t('staff_notified');
+
+      // Save alert to STORE (visible in Staff Dashboard)
+      try {
+        if (window.STORE && STORE.addEmergency) {
+          STORE.addEmergency('Emergency Help Requested from Tablet');
+        }
+      } catch (e) {}
+
+      // Also alert via WebSocket (robot speaks)
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'say', text: (I18N.getLang() === 'ar') ? '\u062a\u0646\u0628\u064a\u0647 \u0637\u0648\u0627\u0631\u0626! \u064a\u0631\u062c\u0649 \u0645\u0633\u0627\u0639\u062f\u0629 \u0627\u0644\u0645\u0631\u064a\u0636 \u0641\u0648\u0631\u064b\u0627.' : 'Emergency Alert Triggered! Please assist the patient immediately.', lang: I18N.getLang() }));
+        }
+      } catch (e) {}
+
+      // Redirect after 3 seconds
+      setTimeout(function () { window.location.href = 'index.html'; }, 3000);
+    }
+
+    btn.addEventListener('mousedown',  startHold);
+    btn.addEventListener('mouseup',    cancelHold);
+    btn.addEventListener('mouseleave', cancelHold);
+    btn.addEventListener('touchstart', startHold);
+    btn.addEventListener('touchend',   cancelHold);
+
+    if (window.I18N) I18N.applyI18n();
+  </script>
+</body>
+</html>

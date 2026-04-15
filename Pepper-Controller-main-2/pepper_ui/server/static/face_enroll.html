@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Link Face ID - Pepper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f7f4f0; min-height: 100vh;
+           display: -webkit-flex; display: flex; align-items: center; justify-content: center; }
+    .card { background: white; border-radius: 24px; padding: 30px; width: 92%; max-width: 480px;
+            box-shadow: 0 10px 30px rgba(184,154,108,0.15); text-align: center; }
+    h1 { color: #5a4a3b; margin-bottom: 4px; font-size: 22px; }
+    .sub { color: #8a7b6b; font-size: 14px; margin-bottom: 20px; }
+
+    /* Camera */
+    #cam-box { position: relative; border-radius: 16px; overflow: hidden;
+               background: #111; margin-bottom: 16px; }
+    video { width: 100%; display: block; border-radius: 16px; }
+    .face-ring { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-55%);
+                 width: 180px; height: 220px; border: 3px solid #b89a6c;
+                 border-radius: 50%; pointer-events: none; }
+    .face-ring.ok  { border-color: #5cb85c; box-shadow: 0 0 0 4px rgba(92,184,92,.25); }
+    .face-ring.bad { border-color: #d9534f; }
+
+    /* Progress */
+    .progress-label { font-size: 13px; color: #8a7b6b; margin-bottom: 6px; }
+    .progress-bar { background: #eee; border-radius: 20px; height: 10px; margin-bottom: 16px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #b89a6c; border-radius: 20px;
+                     transition: width 0.3s; width: 0%; }
+
+    /* Thumbnails */
+    .thumbs { display: -webkit-flex; display: flex; gap: 8px; justify-content: center;
+              flex-wrap: wrap; margin-bottom: 16px; min-height: 60px; }
+    .thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover;
+             border: 2px solid #b89a6c; }
+
+    /* Buttons */
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 12px;
+           background: #b89a6c; color: white; font-size: 17px; font-weight: bold;
+           cursor: pointer; margin-top: 8px; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-outline { background: transparent; border: 2px solid #b89a6c; color: #b89a6c; }
+    .btn-danger  { background: #d9534f; }
+    .btn-sm      { padding: 10px; font-size: 14px; margin-top: 6px; }
+
+    /* Status */
+    .status { font-size: 14px; min-height: 36px; padding: 8px;
+              border-radius: 8px; margin-top: 10px; }
+    .status.info    { background: #f0ebe3; color: #5a4a3b; }
+    .status.success { background: #d4edda; color: #155724; font-weight: bold; }
+    .status.error   { background: #f8d7da; color: #721c24; }
+    .status.warn    { background: #fff3cd; color: #856404; }
+
+    canvas { display: none; }
+    .step-badge { display: inline-block; background: #b89a6c; color: white;
+                  border-radius: 50px; padding: 4px 14px; font-size: 13px; margin-bottom: 14px; }
+    .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <button onclick="history.back()" style="float:left;background:none;border:none;font-size:22px;cursor:pointer;color:#8a7b6b;">&#8592;</button>
+  <h1>&#128247; Link Face ID</h1>
+  <p class="sub">Register your face to log in without a password</p>
+
+  <div class="step-badge" id="step-badge">Step 1 of 2 — Position Your Face</div>
+
+  <div id="cam-box">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="face-ring" id="face-ring"></div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <div class="progress-label" id="prog-label">0 / 5 photos captured</div>
+  <div class="progress-bar"><div class="progress-fill" id="prog-fill"></div></div>
+
+  <div class="thumbs" id="thumbs"></div>
+
+  <button class="btn" id="captureBtn" onclick="capturePhoto()">&#128247; Take Photo</button>
+  <button class="btn btn-outline btn-sm" id="retakeBtn" onclick="resetCaptures()" style="display:none">&#8635; Start Over</button>
+  <button class="btn btn-sm" id="enrollBtn" onclick="enrollFace()" style="display:none;background:#5cb85c;">&#10003; Save Face ID</button>
+
+  <hr class="divider">
+  <div class="status info" id="status">Look straight at the camera, keep your face inside the oval.</div>
+</div>
+
+<script src="demo_store.js"></script>
+<script>
+  var NEEDED  = 5;      // photos needed for enrollment
+  var images  = [];
+  var video   = document.getElementById('video');
+  var canvas  = document.getElementById('canvas');
+  var ring    = document.getElementById('face-ring');
+  var status  = document.getElementById('status');
+  var progFill = document.getElementById('prog-fill');
+  var progLabel = document.getElementById('prog-label');
+  var captureBtn = document.getElementById('captureBtn');
+  var retakeBtn  = document.getElementById('retakeBtn');
+  var enrollBtn  = document.getElementById('enrollBtn');
+  var stepBadge  = document.getElementById('step-badge');
+  var thumbsDiv  = document.getElementById('thumbs');
+
+  // Get logged-in patient
+  var me = (window.STORE && STORE.me) ? STORE.me() : null;
+  if (!me || me.role !== 'patient') {
+    document.querySelector('.card').innerHTML =
+      '<h1 style="color:#d9534f;margin:20px">Not Logged In</h1>' +
+      '<p style="color:#8a7b6b;margin:10px">Please log in as a patient first.</p>' +
+      '<a href="login.html" style="display:block;margin:20px auto;padding:14px;background:#b89a6c;color:white;border-radius:12px;text-decoration:none;">Go to Login</a>';
+  }
+
+  // Stream from Pepper's camera via server endpoint (no HTTPS needed)
+  var streamInterval = null;
+  (function startStream() {
+    streamInterval = setInterval(function() {
+      var img = new Image();
+      img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        video.style.display = 'none';
+        canvas.style.display = 'block';
+        canvas.style.width = '100%';
+        canvas.style.borderRadius = '16px';
+      };
+      img.src = '/api/camera/snapshot?t=' + Date.now();
+    }, 500);
+  })();
+
+  function capturePhoto() {
+    if (images.length >= NEEDED) return;
+
+    // Grab a fresh frame as base64 from the server
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/camera/snapshot_b64', true);
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      try {
+        var snap = JSON.parse(xhr.responseText);
+        if (snap.error) { setStatus('Camera error: ' + snap.error, 'error'); return; }
+        var dataUrl = snap.data_url;
+        images.push(dataUrl);
+        updateProgress();
+        addThumb(dataUrl);
+        finishCapture();
+      } catch(e) {
+        setStatus('Camera error. Try again.', 'error');
+      }
+    };
+    xhr.send();
+    return; // async — finishCapture handles the rest
+  }
+
+  function finishCapture() {
+
+    // Animate ring
+    ring.className = 'face-ring ok';
+    setTimeout(function() { ring.className = 'face-ring'; }, 400);
+
+    if (images.length >= NEEDED) {
+      captureBtn.disabled = true;
+      retakeBtn.style.display = 'block';
+      enrollBtn.style.display = 'block';
+      stepBadge.textContent   = 'Step 2 of 2 — Save Your Face ID';
+      setStatus('All photos captured! Click "Save Face ID" to link your account.', 'success');
+    } else {
+      var left = NEEDED - images.length;
+      setStatus(left + ' more photo' + (left > 1 ? 's' : '') + ' needed. Slightly turn your head each time.', 'info');
+    }
+  }
+
+  function updateProgress() {
+    var pct = (images.length / NEEDED) * 100;
+    progFill.style.width = pct + '%';
+    progLabel.textContent = images.length + ' / ' + NEEDED + ' photos captured';
+  }
+
+  function addThumb(src) {
+    var img = document.createElement('img');
+    img.src = src; img.className = 'thumb';
+    thumbsDiv.appendChild(img);
+  }
+
+  function resetCaptures() {
+    images = [];
+    thumbsDiv.innerHTML = '';
+    captureBtn.disabled = false;
+    retakeBtn.style.display  = 'none';
+    enrollBtn.style.display  = 'none';
+    stepBadge.textContent    = 'Step 1 of 2 — Position Your Face';
+    updateProgress();
+    setStatus('Look straight at the camera, keep your face inside the oval.', 'info');
+  }
+
+  function enrollFace() {
+    if (!me) { setStatus('Not logged in.', 'error'); return; }
+    if (images.length < NEEDED) { setStatus('Please capture all ' + NEEDED + ' photos first.', 'warn'); return; }
+
+    enrollBtn.disabled = true;
+    enrollBtn.textContent = 'Saving...';
+    setStatus('Uploading face data to server...', 'info');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/face_enroll', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.timeout = 30000;
+
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      enrollBtn.disabled = false;
+      enrollBtn.textContent = '✓ Save Face ID';
+      try {
+        var data = JSON.parse(xhr.responseText);
+        if (data.success) {
+          setStatus('Face ID linked successfully! You can now log in with your face.', 'success');
+          enrollBtn.style.background = '#aaa';
+          enrollBtn.disabled = true;
+          enrollBtn.textContent = '✓ Enrolled';
+          stepBadge.textContent = '✓ Face ID Active';
+          stepBadge.style.background = '#5cb85c';
+          // Return to home after 2s
+          setTimeout(function() { window.location.href = 'index.html'; }, 2000);
+        } else {
+          setStatus('Enrollment failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+      } catch(e) {
+        setStatus('Server error. Please try again.', 'error');
+      }
+    };
+
+    xhr.ontimeout = function() {
+      enrollBtn.disabled = false;
+      setStatus('Request timed out. Please try again.', 'error');
+    };
+
+    xhr.send(JSON.stringify({ patient_id: me.id, images: images }));
+  }
+
+  function setStatus(msg, type) {
+    status.textContent  = msg;
+    status.className    = 'status ' + (type || 'info');
+  }
+</script>
+</body>
+</html>

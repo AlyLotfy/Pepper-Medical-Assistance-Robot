@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8" />
+<title>Staff Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{font-family:sans-serif;background:-webkit-linear-gradient(315deg,#f7f4f0,#fff);background:linear-gradient(135deg,#f7f4f0,#fff);margin:0;height:100vh;overflow:hidden}
+  .wrap{width:94%;max-width:1000px;margin:16px auto;background:#fff;border-radius:22px;box-shadow:0 10px 30px rgba(184,154,108,.15);padding:14px;height:calc(100vh - 32px);overflow:auto}
+  .top{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:space-between;justify-content:space-between;-webkit-flex-wrap:wrap;flex-wrap:wrap}
+  .title{font-size:20px;font-weight:800;color:#5a4a3b}
+  .sub{font-size:12px;color:#8a7b6b;margin-top:4px}
+  .btn{border:0;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer;background:#b89a6c;color:#fff}
+  .btn.secondary{background:#eee;color:#5a4a3b}
+  .tabs{display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin:12px 0}
+  .tabs .tab{margin-right:8px;margin-bottom:4px}
+  .tab{padding:9px 12px;border-radius:999px;border:1px solid #eee;background:#fafafa;cursor:pointer;font-weight:700;color:#5a4a3b}
+  .tab.active{background:#b89a6c;color:#fff;border-color:#b89a6c}
+  .panel{display:none;border:1px solid #f0e6d8;border-radius:18px;padding:12px}
+  .panel.active{display:block}
+  .row{display:grid;grid-template-columns:1fr;gap:12px}
+  @media(min-width:860px){.row{grid-template-columns:1fr 1fr}}
+  .card{border:1px solid #eee;border-radius:14px;padding:10px;margin-bottom:10px}
+  .muted{color:#8a7b6b;font-size:12px}
+  .field{margin:8px 0}
+  label{display:block;font-size:12px;font-weight:800;color:#5a4a3b;margin:0 0 4px 4px}
+  input,select{width:100%;padding:12px;border-radius:12px;border:1px solid #ddd;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:#b89a6c}
+  .msg{padding:10px;border-radius:12px;background:#faf7f2;color:#8a7b6b}
+  .danger{background:rgba(217,83,79,.06);border-color:rgba(217,83,79,.25);border:1px solid rgba(217,83,79,.25)}
+  .inline{display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;-webkit-align-items:center;align-items:center}
+  .inline>*{margin-right:8px}
+  .stat-card{background:#faf7f2;border-radius:14px;padding:14px;text-align:center}
+  .stat-card .stat-num{font-size:28px;font-weight:800;color:#b89a6c}
+  .stat-card .stat-label{font-size:11px;color:#8a7b6b;margin-top:4px}
+  .bar-row{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;margin-bottom:8px}
+  .bar-label{width:100px;font-size:12px;font-weight:700;color:#5a4a3b;-webkit-flex-shrink:0;flex-shrink:0}
+  .bar-track{-webkit-flex:1;flex:1;height:22px;background:#f0e6d8;border-radius:6px;overflow:hidden;margin:0 8px}
+  .bar-fill{height:100%;border-radius:6px;-webkit-transition:width .4s ease;transition:width .4s ease}
+  .bar-count{font-size:12px;font-weight:700;color:#5a4a3b;width:30px;text-align:right}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="title" data-i18n="staff_dashboard">Staff Dashboard</div>
+      <div class="sub" id="subtitle" data-i18n="loading">Loading...</div>
+    </div>
+    <div class="inline">
+      <button class="btn secondary" onclick="location.href='index.html'" data-i18n="home">Home</button>
+      <button class="btn" onclick="logout()" data-i18n="logout">Logout</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('appointments')" data-tab="appointments" data-i18n="appointments_tab">Appointments</div>
+    <div class="tab" onclick="showTab('emergency')" data-tab="emergency" data-i18n="emergency_tab">Emergency</div>
+    <div class="tab" onclick="showTab('doctors')" data-tab="doctors" data-i18n="doctors_tab">Doctors</div>
+    <div class="tab" onclick="showTab('schedule')" data-tab="schedule" data-i18n="schedule_tab">Schedule</div>
+    <div class="tab" onclick="showTab('patients')" data-tab="patients" data-i18n="patients_tab">Patients</div>
+    <div class="tab" onclick="showTab('triage')" data-tab="triage">Triage</div>
+    <div class="tab" onclick="showTab('analytics')" data-tab="analytics" data-i18n="analytics_tab">Analytics</div>
+  </div>
+
+  <!-- APPOINTMENTS -->
+  <div class="panel active" id="tab-appointments">
+    <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+      <div class="muted">All booked appointments</div>
+      <button class="btn secondary" onclick="renderAppointments()">Refresh</button>
+    </div>
+    <div id="appointmentsList" class="msg">Loading...</div>
+  </div>
+
+  <!-- EMERGENCY -->
+  <div class="panel" id="tab-emergency">
+    <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+      <div class="muted">Emergency requests from patients</div>
+      <div class="inline">
+        <button class="btn secondary" onclick="renderEmergencies()">Refresh</button>
+        <button class="btn" onclick="clearEmergencies()">Clear All</button>
+      </div>
+    </div>
+    <div id="emergencyList" class="msg">Loading...</div>
+  </div>
+
+  <!-- DOCTORS -->
+  <div class="panel" id="tab-doctors">
+    <div class="row">
+      <div>
+        <h3 style="margin:0 0 8px 0;color:#5a4a3b">Add Doctor</h3>
+        <div class="field"><label>Name</label><input id="docName" placeholder="e.g. Ahmed Salah"></div>
+        <div class="field"><label>Department</label><input id="docDept" placeholder="e.g. Cardiology"></div>
+        <div class="field"><label>Room</label><input id="docRoom" placeholder="e.g. Room 110, First Floor"></div>
+        <button class="btn" onclick="addDoctor()">Add Doctor</button>
+        <div class="muted" id="docMsg" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+          <h3 style="margin:0;color:#5a4a3b">Doctors List</h3>
+          <button class="btn secondary" onclick="renderDoctors()">Refresh</button>
+        </div>
+        <div id="doctorsList" class="msg">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCHEDULE -->
+  <div class="panel" id="tab-schedule">
+    <div class="row">
+      <div>
+        <h3 style="margin:0 0 8px 0;color:#5a4a3b">Edit Doctor Schedule</h3>
+        <div class="field">
+          <label>Select Doctor</label>
+          <select id="schDoctor" onchange="loadSchedule()"></select>
+        </div>
+        <div class="field">
+          <label>Day</label>
+          <select id="schDay">
+            <option>Sunday</option><option>Monday</option><option>Tuesday</option>
+            <option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option>
+          </select>
+        </div>
+        <div class="row" style="grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field"><label>Start</label><input id="schStart" placeholder="09:00"></div>
+          <div class="field"><label>End</label><input id="schEnd" placeholder="13:00"></div>
+        </div>
+        <button class="btn" onclick="addScheduleRow()">Add Row</button>
+        <button class="btn secondary" onclick="saveSchedule()" style="margin-left:8px">Save Schedule</button>
+        <div class="muted" id="schMsg" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+          <h3 style="margin:0;color:#5a4a3b">Current Schedule</h3>
+          <button class="btn secondary" onclick="loadSchedule()">Refresh</button>
+        </div>
+        <div id="scheduleList" class="msg">Select a doctor to view schedule.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRIAGE -->
+  <div class="panel" id="tab-triage">
+    <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+      <div class="muted">Patient triage assessments (latest first)</div>
+      <div class="inline">
+        <button class="btn secondary" onclick="renderTriages()">Refresh</button>
+        <button class="btn secondary" onclick="exportTriagePDF()" data-i18n="export_pdf">Export PDF</button>
+        <button class="btn" onclick="clearTriages()">Clear All</button>
+      </div>
+    </div>
+    <div id="triageList" class="msg">Loading...</div>
+  </div>
+
+  <!-- PATIENTS -->
+  <div class="panel" id="tab-patients">
+    <div class="inline" style="justify-content:space-between;margin-bottom:10px">
+      <div class="muted">Registered patients &amp; appointment history</div>
+      <button class="btn secondary" onclick="renderPatients()">Refresh</button>
+    </div>
+    <div id="patientsList" class="msg">Loading...</div>
+  </div>
+
+  <!-- ANALYTICS -->
+  <div class="panel" id="tab-analytics">
+    <div class="muted" style="margin-bottom:12px">Hospital overview &amp; statistics</div>
+    <div class="row" style="grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px" id="statsCards"></div>
+    <div class="row">
+      <div>
+        <h3 style="margin:0 0 8px 0;color:#5a4a3b" data-i18n="triage_distribution">Triage Level Distribution</h3>
+        <div id="triageChart"></div>
+      </div>
+      <div>
+        <h3 style="margin:0 0 8px 0;color:#5a4a3b" data-i18n="dept_distribution">Appointments by Department</h3>
+        <div id="deptChart"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="i18n.js"></script>
+<script src="demo_store.js"></script>
+<script>
+  var currentScheduleRows = [];
+
+  function logout() {
+    try { if (window.STORE && STORE.logout) STORE.logout(); } catch (e) {}
+    location.href = 'login.html';
+  }
+
+  function requireStaff() {
+    var sub = document.getElementById('subtitle');
+    if (!window.STORE || !STORE.me) { if (sub) sub.textContent = 'Demo store missing'; return false; }
+    var me = STORE.me();
+    if (!me) { location.href = 'login.html'; return false; }
+    if (me.role !== 'staff') { if (sub) sub.textContent = 'Access denied: Staff only'; return false; }
+    if (sub) sub.textContent = I18N.t('logged_in_as', me.name);
+    return true;
+  }
+
+  function showTab(name) {
+    var tabs   = document.getElementsByClassName('tab');
+    var panels = document.getElementsByClassName('panel');
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].className = 'tab' + (tabs[i].getAttribute('data-tab') === name ? ' active' : '');
+    }
+    for (var j = 0; j < panels.length; j++) panels[j].className = 'panel';
+    var p = document.getElementById('tab-' + name);
+    if (p) p.className = 'panel active';
+
+    if (name === 'appointments') renderAppointments();
+    if (name === 'emergency')    renderEmergencies();
+    if (name === 'doctors')      renderDoctors();
+    if (name === 'schedule')     { renderDoctorSelect(); loadSchedule(); }
+    if (name === 'patients')     renderPatients();
+    if (name === 'triage')       renderTriages();
+    if (name === 'analytics')    renderAnalytics();
+  }
+
+  /* ---- Appointments ---- */
+  function renderAppointments() {
+    var box = document.getElementById('appointmentsList');
+    if (!box) return;
+    var r   = (window.STORE && STORE.allAppointments) ? STORE.allAppointments() : { appointments: [] };
+    var arr = r.appointments || [];
+    if (!arr.length) { box.className = 'msg'; box.innerHTML = 'No appointments yet.'; return; }
+    var html = '';
+    for (var i = 0; i < arr.length; i++) {
+      var a = arr[i];
+      html += '<div class="card">';
+      html += '<div><strong>Patient:</strong> ' + (a.patient || '') + '</div>';
+      html += '<div><strong>Doctor:</strong> '  + (a.doctor  || '') + '</div>';
+      html += '<div><strong>Date:</strong> '    + (a.date    || '') + '</div>';
+      html += '<div><strong>Time:</strong> '    + (a.time    || '') + '</div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+  }
+
+  /* ---- Emergencies ---- */
+  function renderEmergencies() {
+    var box = document.getElementById('emergencyList');
+    if (!box) return;
+    var r   = (window.STORE && STORE.listEmergencies) ? STORE.listEmergencies() : { emergencies: [] };
+    var arr = r.emergencies || [];
+    if (!arr.length) { box.className = 'msg'; box.innerHTML = 'No active emergency alerts.'; return; }
+    var html = '';
+    for (var i = 0; i < arr.length; i++) {
+      var e = arr[i];
+      html += '<div class="card danger">';
+      html += '<div><strong>Patient:</strong> ' + (e.patient  || 'Unknown') + '</div>';
+      html += '<div><strong>Message:</strong> ' + (e.message  || '')        + '</div>';
+      html += '<div class="muted">'             + (e.time     || '')        + '</div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+  }
+
+  function clearEmergencies() {
+    if (window.STORE && STORE.clearEmergencies) STORE.clearEmergencies();
+    renderEmergencies();
+  }
+
+  /* ---- Doctors ---- */
+  function renderDoctors() {
+    var box = document.getElementById('doctorsList');
+    if (!box) return;
+    var r    = (window.STORE && STORE.getDoctors) ? STORE.getDoctors() : { doctors: [] };
+    var docs = r.doctors || [];
+    if (!docs.length) { box.className = 'msg'; box.innerHTML = 'No doctors.'; return; }
+    var html = '';
+    for (var i = 0; i < docs.length; i++) {
+      var d = docs[i];
+      html += '<div class="card">';
+      html += '<div><strong>' + (d.name || '') + '</strong> <span class="muted">(' + (d.department || '') + ')</span></div>';
+      html += '<div class="muted">' + (d.room || '') + '</div>';
+      html += '<div style="margin-top:8px"><button class="btn secondary" onclick="removeDoctor(\'' + d.id + '\')">Remove</button></div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+    renderDoctorSelect();
+  }
+
+  function addDoctor() {
+    var name = document.getElementById('docName').value;
+    var dept = document.getElementById('docDept').value;
+    var room = document.getElementById('docRoom').value;
+    var msg  = document.getElementById('docMsg');
+    if (!name || !dept || !room) { if (msg) msg.textContent = 'Fill all fields.'; return; }
+    if (window.STORE && STORE.addDoctor) STORE.addDoctor(name, dept, room);
+    if (msg) msg.textContent = 'Doctor added.';
+    document.getElementById('docName').value = '';
+    document.getElementById('docDept').value = '';
+    document.getElementById('docRoom').value = '';
+    renderDoctors();
+  }
+
+  function removeDoctor(id) {
+    if (window.STORE && STORE.removeDoctor) STORE.removeDoctor(id);
+    renderDoctors();
+    loadSchedule();
+  }
+
+  /* ---- Schedule ---- */
+  function renderDoctorSelect() {
+    var sel = document.getElementById('schDoctor');
+    if (!sel) return;
+    var r    = (window.STORE && STORE.getDoctors) ? STORE.getDoctors() : { doctors: [] };
+    var docs = r.doctors || [];
+    sel.innerHTML = '';
+    for (var i = 0; i < docs.length; i++) {
+      var opt   = document.createElement('option');
+      opt.value = docs[i].id;
+      opt.text  = docs[i].name;
+      sel.appendChild(opt);
+    }
+  }
+
+  function loadSchedule() {
+    var sel = document.getElementById('schDoctor');
+    var box = document.getElementById('scheduleList');
+    if (!sel || !box) return;
+    var r = (window.STORE && STORE.getSchedule) ? STORE.getSchedule(sel.value) : { schedule: [] };
+    currentScheduleRows = r.schedule || [];
+    renderScheduleBox();
+  }
+
+  function renderScheduleBox() {
+    var box = document.getElementById('scheduleList');
+    if (!box) return;
+    if (!currentScheduleRows.length) { box.className = 'msg'; box.innerHTML = 'No schedule rows. Add some then Save.'; return; }
+    var html = '';
+    for (var i = 0; i < currentScheduleRows.length; i++) {
+      var s = currentScheduleRows[i];
+      html += '<div class="card">';
+      html += '<div><strong>' + (s.day || '') + '</strong></div>';
+      html += '<div class="muted">' + (s.start || '') + ' &ndash; ' + (s.end || '') + '</div>';
+      html += '<div style="margin-top:8px"><button class="btn secondary" onclick="removeScheduleRow(' + i + ')">Remove</button></div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+  }
+
+  function addScheduleRow() {
+    var day   = document.getElementById('schDay').value;
+    var start = document.getElementById('schStart').value;
+    var end   = document.getElementById('schEnd').value;
+    var msg   = document.getElementById('schMsg');
+    if (!day || !start || !end) { if (msg) msg.textContent = 'Fill day/start/end.'; return; }
+    currentScheduleRows.push({ day: day, start: start, end: end });
+    if (msg) msg.textContent = 'Row added (remember to Save).';
+    renderScheduleBox();
+  }
+
+  function removeScheduleRow(i) {
+    var out = [];
+    for (var k = 0; k < currentScheduleRows.length; k++) {
+      if (k !== i) out.push(currentScheduleRows[k]);
+    }
+    currentScheduleRows = out;
+    renderScheduleBox();
+  }
+
+  function saveSchedule() {
+    var sel = document.getElementById('schDoctor');
+    var msg = document.getElementById('schMsg');
+    if (!sel) return;
+    if (window.STORE && STORE.setSchedule) STORE.setSchedule(sel.value, currentScheduleRows);
+    if (msg) msg.textContent = 'Schedule saved.';
+    renderScheduleBox();
+  }
+
+  /* ---- Patients ---- */
+  function renderPatients() {
+    var box = document.getElementById('patientsList');
+    if (!box) return;
+    var r   = (window.STORE && STORE.getPatients) ? STORE.getPatients() : { patients: [] };
+    var arr = r.patients || [];
+    if (!arr.length) { box.className = 'msg'; box.innerHTML = 'No patients.'; return; }
+    var html = '';
+    for (var i = 0; i < arr.length; i++) {
+      var p = arr[i];
+      html += '<div class="card">';
+      html += '<div><strong>' + (p.name || '') + '</strong></div>';
+      if (p.id)          html += '<div class="muted">ID: '   + p.id          + '</div>';
+      if (p.case_number) html += '<div class="muted">Case: ' + p.case_number + '</div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+  }
+
+  /* ---- Triage ---- */
+  var TRIAGE_LEVEL_COLOR = { 1: '#c62828', 2: '#e65100', 3: '#f9a825', 4: '#2e7d32' };
+  var TRIAGE_TEXT_COLOR  = { 1: '#fff',    2: '#fff',    3: '#333',    4: '#fff'    };
+
+  function renderTriages() {
+    var box = document.getElementById('triageList');
+    if (!box) return;
+    var r   = (window.STORE && STORE.listTriages) ? STORE.listTriages() : { triages: [] };
+    var arr = (r.triages || []).slice().reverse(); // latest first
+    if (!arr.length) { box.className = 'msg'; box.innerHTML = 'No triage assessments recorded.'; return; }
+    var html = '';
+    for (var i = 0; i < arr.length; i++) {
+      var t = arr[i];
+      var lvl = t.level || 4;
+      var bg  = TRIAGE_LEVEL_COLOR[lvl] || '#999';
+      var fg  = TRIAGE_TEXT_COLOR[lvl]  || '#fff';
+      var cardCls = (lvl <= 2) ? 'card danger' : 'card';
+      html += '<div class="' + cardCls + '" style="border-left:5px solid ' + bg + '">';
+      html += '<div class="inline" style="margin-bottom:6px">';
+      html += '<span style="background:' + bg + ';color:' + fg + ';font-weight:800;font-size:12px;padding:3px 10px;border-radius:999px;margin-right:8px;">L' + lvl + ' &mdash; ' + (t.label || '') + '</span>';
+      html += '<strong>' + (t.patient || 'Unknown') + '</strong>';
+      html += '</div>';
+      html += '<div><strong>Complaint:</strong> ' + (t.chiefComplaint || '') + '</div>';
+      html += '<div><strong>Pain Score:</strong> ' + (t.painScore || 0) + '/10</div>';
+      if (t.symptoms && t.symptoms.length) {
+        html += '<div><strong>Danger Signs:</strong> ' + t.symptoms.join(', ') + '</div>';
+      }
+      html += '<div><strong>Recommendation:</strong> ' + (t.recommendation || '') + '</div>';
+      html += '<div class="muted">' + (t.time || '') + '</div>';
+      html += '</div>';
+    }
+    box.className = ''; box.innerHTML = html;
+  }
+
+  function clearTriages() {
+    if (window.STORE && STORE.clearTriages) STORE.clearTriages();
+    renderTriages();
+  }
+
+  /* ---- Analytics ---- */
+  function renderAnalytics() {
+    var appts  = (window.STORE && STORE.allAppointments) ? (STORE.allAppointments().appointments || []) : [];
+    var pats   = (window.STORE && STORE.getPatients) ? (STORE.getPatients().patients || []) : [];
+    var docs   = (window.STORE && STORE.getDoctors) ? (STORE.getDoctors().doctors || []) : [];
+    var emgs   = (window.STORE && STORE.listEmergencies) ? (STORE.listEmergencies().emergencies || []) : [];
+    var trgs   = (window.STORE && STORE.listTriages) ? (STORE.listTriages().triages || []) : [];
+
+    /* Stat cards */
+    var cards = document.getElementById('statsCards');
+    if (cards) {
+      cards.innerHTML =
+        '<div class="stat-card"><div class="stat-num">' + appts.length + '</div><div class="stat-label">' + I18N.t('total_appointments') + '</div></div>' +
+        '<div class="stat-card"><div class="stat-num">' + pats.length  + '</div><div class="stat-label">' + I18N.t('total_patients') + '</div></div>' +
+        '<div class="stat-card"><div class="stat-num">' + docs.length  + '</div><div class="stat-label">' + I18N.t('total_doctors') + '</div></div>' +
+        '<div class="stat-card"><div class="stat-num">' + emgs.length  + '</div><div class="stat-label">' + I18N.t('total_emergencies') + '</div></div>';
+    }
+
+    /* Triage distribution bar chart */
+    var triageBox = document.getElementById('triageChart');
+    if (triageBox) {
+      var levels = { 1: 0, 2: 0, 3: 0, 4: 0 };
+      for (var i = 0; i < trgs.length; i++) { var lv = trgs[i].level || 4; levels[lv] = (levels[lv] || 0) + 1; }
+      var maxT = Math.max(levels[1], levels[2], levels[3], levels[4], 1);
+      var labels = { 1: 'L1 Immediate', 2: 'L2 Very Urgent', 3: 'L3 Urgent', 4: 'L4 Standard' };
+      var colors = { 1: '#c62828', 2: '#e65100', 3: '#f9a825', 4: '#2e7d32' };
+      var html = '';
+      for (var lvl = 1; lvl <= 4; lvl++) {
+        var pct = Math.round((levels[lvl] / maxT) * 100);
+        html += '<div class="bar-row"><div class="bar-label">' + labels[lvl] + '</div>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:' + colors[lvl] + '"></div></div>' +
+          '<div class="bar-count">' + levels[lvl] + '</div></div>';
+      }
+      if (trgs.length === 0) html = '<div class="msg">No triage data yet.</div>';
+      triageBox.innerHTML = html;
+    }
+
+    /* Dept distribution bar chart */
+    var deptBox = document.getElementById('deptChart');
+    if (deptBox) {
+      var deptMap = {};
+      for (var j = 0; j < appts.length; j++) {
+        var docName = appts[j].doctor || '';
+        var dept = '';
+        for (var k = 0; k < docs.length; k++) {
+          if (docs[k].name === docName) { dept = docs[k].department; break; }
+        }
+        if (!dept) dept = 'Other';
+        deptMap[dept] = (deptMap[dept] || 0) + 1;
+      }
+      var deptKeys = [];
+      for (var d in deptMap) { if (deptMap.hasOwnProperty(d)) deptKeys.push(d); }
+      deptKeys.sort(function (a, b) { return deptMap[b] - deptMap[a]; });
+      var maxD = deptKeys.length > 0 ? deptMap[deptKeys[0]] : 1;
+      var dHtml = '';
+      var shown = Math.min(deptKeys.length, 8);
+      for (var di = 0; di < shown; di++) {
+        var dp = deptKeys[di];
+        var dpct = Math.round((deptMap[dp] / maxD) * 100);
+        dHtml += '<div class="bar-row"><div class="bar-label">' + dp + '</div>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + dpct + '%;background:#b89a6c"></div></div>' +
+          '<div class="bar-count">' + deptMap[dp] + '</div></div>';
+      }
+      if (appts.length === 0) dHtml = '<div class="msg">No appointment data yet.</div>';
+      deptBox.innerHTML = dHtml;
+    }
+  }
+
+  /* ---- Triage PDF Export ---- */
+  function exportTriagePDF() {
+    var trgs = (window.STORE && STORE.listTriages) ? (STORE.listTriages().triages || []) : [];
+    if (!trgs.length) { alert('No triage data to export.'); return; }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/triage_export_pdf', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.responseType = 'blob';
+
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState === 4) {
+        if (xhr.status === 200) {
+          var blob = xhr.response;
+          var url = window.URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = 'triage_report_' + new Date().toISOString().slice(0, 10) + '.pdf';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+        } else {
+          alert('PDF export failed. Check server logs.');
+        }
+      }
+    };
+
+    try {
+      xhr.send(JSON.stringify({ triages: trgs }));
+    } catch (e) {
+      alert('Could not connect to server for PDF export.');
+    }
+  }
+
+  /* ---- Real-time WebSocket sync ---- */
+  var staffWs = null;
+  function connectStaffWs() {
+    try {
+      var host = window.location.hostname || '127.0.0.1';
+      staffWs = new WebSocket('ws://' + host + ':8765');
+      staffWs.onmessage = function (event) {
+        try {
+          var msg = JSON.parse(event.data);
+          if (msg.type === 'appointment_booked') {
+            renderAppointments();
+            /* Flash the Appointments tab */
+            var tabs = document.getElementsByClassName('tab');
+            for (var i = 0; i < tabs.length; i++) {
+              if (tabs[i].getAttribute('data-tab') === 'appointments' && tabs[i].className.indexOf('active') === -1) {
+                tabs[i].style.background = '#d9534f';
+                tabs[i].style.color = '#fff';
+                setTimeout(function () {
+                  var t = document.querySelector('[data-tab="appointments"]');
+                  if (t && t.className.indexOf('active') === -1) { t.style.background = ''; t.style.color = ''; }
+                }, 3000);
+              }
+            }
+          }
+          if (msg.type === 'emergency_alert') {
+            renderEmergencies();
+          }
+        } catch (e) {}
+      };
+      staffWs.onclose = function () { setTimeout(connectStaffWs, 3000); };
+    } catch (e) {}
+  }
+
+  /* ---- Init ---- */
+  window.onload = function () {
+    if (window.I18N) I18N.applyI18n();
+    if (!requireStaff()) return;
+    renderAppointments();
+    renderEmergencies();
+    renderDoctors();
+    renderDoctorSelect();
+    loadSchedule();
+    renderPatients();
+    connectStaffWs();
+  };
+</script>
+</body>
+</html>

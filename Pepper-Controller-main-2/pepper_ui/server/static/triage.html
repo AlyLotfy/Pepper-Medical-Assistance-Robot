@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Symptom Check — Pepper Medical Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    /* ---- RESET ---- */
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f9f7f5, #ffffff);
+      background:         linear-gradient(135deg, #f9f7f5, #ffffff);
+      color: #5a4a3b;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    /* ---- CARD ---- */
+    .card {
+      width: 100%;
+      max-width: 860px;
+      background: #ffffff;
+      border-radius: 24px;
+      box-shadow: 0 16px 48px rgba(90, 74, 59, 0.13);
+      padding: 0;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      min-height: 560px;
+      overflow: hidden;
+    }
+
+    /* ---- HEADER ---- */
+    .card-header {
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: space-between; justify-content: space-between;
+      padding: 22px 28px 18px 28px;
+      border-bottom: 1px solid #f0ebe4;
+      -webkit-flex-shrink: 0; flex-shrink: 0;
+    }
+
+    .back-btn {
+      background: #f7f4f0;
+      border: none;
+      color: #5a4a3b;
+      font-size: 20px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      -webkit-transition: background 0.2s; transition: background 0.2s;
+    }
+    .back-btn:active { background: #ede8e0; }
+
+    .header-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #5a4a3b;
+      text-align: center;
+      -webkit-flex: 1; flex: 1;
+    }
+
+    .step-indicator {
+      font-size: 14px;
+      font-weight: 600;
+      color: #b89a6c;
+      background: #fdf8f0;
+      border: 1.5px solid #e8d9c0;
+      border-radius: 20px;
+      padding: 6px 16px;
+      white-space: nowrap;
+    }
+
+    /* ---- PROGRESS BAR ---- */
+    .progress-bar-wrap {
+      height: 4px;
+      background: #f0ebe4;
+      -webkit-flex-shrink: 0; flex-shrink: 0;
+    }
+    .progress-bar-fill {
+      height: 4px;
+      background: #b89a6c;
+      -webkit-transition: width 0.4s ease; transition: width 0.4s ease;
+    }
+
+    /* ---- CONTENT ---- */
+    .card-body {
+      -webkit-flex: 1; flex: 1;
+      padding: 28px 28px 16px 28px;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+    }
+
+    .step-question {
+      font-size: 20px;
+      font-weight: 700;
+      color: #5a4a3b;
+      margin-bottom: 22px;
+      line-height: 1.35;
+    }
+
+    /* ---- STEP 1: CHIEF COMPLAINT GRID ---- */
+    .complaint-grid {
+      display: -webkit-flex; display: flex;
+      -webkit-flex-wrap: wrap; flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    .complaint-btn {
+      -webkit-flex: 1 1 calc(50% - 7px); flex: 1 1 calc(50% - 7px);
+      min-height: 88px;
+      background: #f7f4f0;
+      border: 2px solid #e8ddd0;
+      border-radius: 16px;
+      cursor: pointer;
+      font-size: 17px;
+      font-weight: 600;
+      color: #5a4a3b;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      -webkit-transition: border-color 0.2s, background 0.2s, -webkit-transform 0.15s;
+      transition: border-color 0.2s, background 0.2s, transform 0.15s;
+      text-align: center;
+      line-height: 1.3;
+      padding: 10px 12px;
+    }
+    .complaint-btn:active { -webkit-transform: scale(0.97); transform: scale(0.97); }
+    .complaint-btn.selected {
+      border-color: #b89a6c;
+      background: #fdf8f0;
+      box-shadow: 0 0 0 1px #b89a6c;
+    }
+
+    /* ---- STEP 2: PAIN SCORE ---- */
+    .pain-row {
+      display: -webkit-flex; display: flex;
+      -webkit-justify-content: center; justify-content: center;
+      gap: 8px;
+      -webkit-flex-wrap: wrap; flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .pain-btn {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      border: 2.5px solid transparent;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 700;
+      color: #ffffff;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      -webkit-transition: -webkit-transform 0.15s, box-shadow 0.15s;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .pain-btn:active { -webkit-transform: scale(0.92); transform: scale(0.92); }
+    .pain-btn.selected {
+      border-color: #5a4a3b;
+      box-shadow: 0 0 0 3px rgba(90,74,59,0.25);
+      -webkit-transform: scale(1.12); transform: scale(1.12);
+    }
+    .pain-btn.green  { background: #4caf50; }
+    .pain-btn.orange { background: #ff9800; }
+    .pain-btn.red    { background: #c62828; }
+
+    .pain-labels {
+      display: -webkit-flex; display: flex;
+      -webkit-justify-content: space-between; justify-content: space-between;
+      font-size: 13px;
+      color: #8a7b6b;
+      font-weight: 600;
+      padding: 0 4px;
+      margin-top: 4px;
+    }
+
+    /* ---- STEP 3: DANGER SIGNS ---- */
+    .checkbox-list {
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      gap: 12px;
+    }
+
+    .check-row {
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      gap: 14px;
+      background: #f7f4f0;
+      border: 2px solid #e8ddd0;
+      border-radius: 14px;
+      padding: 16px 18px;
+      cursor: pointer;
+      -webkit-transition: border-color 0.2s, background 0.2s;
+      transition: border-color 0.2s, background 0.2s;
+      -webkit-user-select: none; user-select: none;
+    }
+    .check-row:active { background: #ede8e0; }
+    .check-row.checked {
+      border-color: #b89a6c;
+      background: #fdf8f0;
+    }
+
+    .check-box {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      border: 2.5px solid #c5b49a;
+      background: #ffffff;
+      -webkit-flex-shrink: 0; flex-shrink: 0;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      font-size: 16px;
+      -webkit-transition: background 0.2s, border-color 0.2s;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .check-row.checked .check-box {
+      background: #b89a6c;
+      border-color: #b89a6c;
+      color: #ffffff;
+    }
+
+    .check-label {
+      font-size: 16px;
+      font-weight: 600;
+      color: #5a4a3b;
+      line-height: 1.3;
+    }
+
+    /* ---- STEP 4: RESULT ---- */
+    .result-wrap {
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      gap: 18px;
+    }
+
+    .level-circle {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      color: #ffffff;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    }
+    .level-circle.dark-text { color: #333; }
+
+    .level-num {
+      font-size: 36px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .level-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+
+    .result-info {
+      width: 100%;
+      background: #f7f4f0;
+      border-radius: 16px;
+      padding: 18px 20px;
+    }
+    .result-info-row {
+      display: -webkit-flex; display: flex;
+      -webkit-justify-content: space-between; justify-content: space-between;
+      -webkit-align-items: center; align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #ede8e0;
+      font-size: 15px;
+    }
+    .result-info-row:last-child { border-bottom: none; }
+    .result-info-key { color: #8a7b6b; font-weight: 600; }
+    .result-info-val { color: #5a4a3b; font-weight: 700; text-align: right; max-width: 60%; }
+
+    .result-recommendation {
+      width: 100%;
+      background: #fdf8f0;
+      border: 1.5px solid #e8d9c0;
+      border-radius: 14px;
+      padding: 14px 18px;
+      font-size: 15px;
+      color: #5a4a3b;
+      line-height: 1.5;
+    }
+
+    .result-action-btn {
+      width: 100%;
+      height: 62px;
+      border: none;
+      border-radius: 16px;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 700;
+      color: #ffffff;
+      -webkit-transition: opacity 0.2s, -webkit-transform 0.15s;
+      transition: opacity 0.2s, transform 0.15s;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+    }
+    .result-action-btn:active { -webkit-transform: scale(0.97); transform: scale(0.97); opacity: 0.9; }
+
+    .start-over-link {
+      color: #b89a6c;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+
+    /* ---- SPINNER ---- */
+    .spinner-wrap {
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+      -webkit-flex: 1; flex: 1;
+      gap: 18px;
+    }
+    .spinner {
+      width: 52px; height: 52px;
+      border: 5px solid #e8ddd0;
+      border-top-color: #b89a6c;
+      border-radius: 50%;
+      -webkit-animation: spin 0.85s linear infinite;
+      animation: spin 0.85s linear infinite;
+    }
+    @-webkit-keyframes spin { to { -webkit-transform: rotate(360deg); transform: rotate(360deg); } }
+    @keyframes spin { to { -webkit-transform: rotate(360deg); transform: rotate(360deg); } }
+    .spinner-text { font-size: 17px; font-weight: 600; color: #8a7b6b; }
+
+    /* ---- NAV FOOTER ---- */
+    .card-footer {
+      display: -webkit-flex; display: flex;
+      -webkit-justify-content: space-between; justify-content: space-between;
+      -webkit-align-items: center; align-items: center;
+      padding: 16px 28px 24px 28px;
+      -webkit-flex-shrink: 0; flex-shrink: 0;
+      gap: 12px;
+    }
+
+    .nav-btn {
+      height: 52px;
+      border-radius: 14px;
+      border: none;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      -webkit-transition: opacity 0.2s, -webkit-transform 0.15s;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .nav-btn:active { -webkit-transform: scale(0.97); transform: scale(0.97); }
+    .nav-btn:disabled { opacity: 0.38; cursor: default; }
+
+    .nav-btn-back {
+      background: #f7f4f0;
+      color: #5a4a3b;
+      padding: 0 28px;
+    }
+
+    .nav-btn-next {
+      background: #b89a6c;
+      color: #ffffff;
+      padding: 0 36px;
+      box-shadow: 0 4px 14px rgba(184,154,108,0.35);
+      -webkit-flex: 1; flex: 1;
+    }
+
+    /* ---- VALIDATION ERROR ---- */
+    .error-hint {
+      color: #c62828;
+      font-size: 13px;
+      font-weight: 600;
+      min-height: 18px;
+      margin-top: 10px;
+    }
+
+    /* ---- HIDDEN ---- */
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="card" id="mainCard">
+
+  <!-- HEADER -->
+  <div class="card-header">
+    <button class="back-btn" id="topBackBtn" title="Go back" onclick="topBack()">&#8592;</button>
+    <div class="header-title" data-i18n="triage_title">Symptom Check</div>
+    <div class="step-indicator" id="stepIndicator">Step 1 of 4</div>
+  </div>
+
+  <!-- PROGRESS BAR -->
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-fill" id="progressBar" style="width:25%"></div>
+  </div>
+
+  <!-- BODY -->
+  <div class="card-body" id="cardBody">
+    <!-- content injected here -->
+  </div>
+
+  <!-- FOOTER NAV -->
+  <div class="card-footer" id="cardFooter">
+    <button class="nav-btn nav-btn-back" id="footerBackBtn" onclick="goBack()">&#8592; Back</button>
+    <button class="nav-btn nav-btn-next" id="footerNextBtn" onclick="goNext()">Next &#8594;</button>
+  </div>
+
+</div>
+
+<script src="i18n.js"></script>
+<script src="demo_store.js"></script>
+<script>
+(function () {
+  /* =============================================
+     STATE
+  ============================================= */
+  var currentStep = 1;
+  var TOTAL_STEPS = 4;
+
+  var STATE = {
+    chiefComplaint: null,      /* key string e.g. "heart" */
+    chiefLabel: null,          /* display label e.g. "❤️ Chest / Heart" */
+    painScore: null,           /* 1–10 */
+    checkedSigns: []           /* array of label strings */
+  };
+
+  /* =============================================
+     WEBSOCKET
+  ============================================= */
+  var ws = null;
+
+  (function initWS() {
+    try {
+      ws = new WebSocket("ws://" + window.location.hostname + ":8765");
+      ws.onerror = function () { ws = null; };
+      ws.onclose = function () { ws = null; };
+    } catch (e) { ws = null; }
+  }());
+
+  function wsSend(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(msg)); } catch (e) {}
+    }
+  }
+
+  /* =============================================
+     DANGER SIGNS DATA
+  ============================================= */
+  var DANGER_SIGNS = {
+    heart:     ["Chest tightens / squeezes", "Pain spreads to arm or jaw", "Sweating heavily"],
+    breathing: ["Cannot speak in full sentences", "Lips or fingertips turning blue", "Using neck muscles to breathe"],
+    neuro:     ["Sudden thunderclap headache", "Face drooping on one side", "Arm weakness / slurred speech"],
+    pain:      ["Deformity / bone visible", "Cannot move the injured area", "Severe open wound"],
+    fever:     ["Neck stiffness / cannot touch chin to chest", "Rash spreading rapidly", "Confused / unusual behavior"],
+    other:     ["Feeling faint / nearly collapsed", "Chest tightness", "Sudden deterioration"]
+  };
+
+  /* =============================================
+     LOCAL TRIAGE FALLBACK
+  ============================================= */
+  function localTriageLevel(category, pain, checkedSigns) {
+    var dangerSignsL1 = [
+      "Cannot speak in full sentences",
+      "Face drooping on one side",
+      "Arm weakness / slurred speech",
+      "Pain spreads to arm or jaw",
+      "Lips or fingertips turning blue"
+    ];
+    var hasL1 = false;
+    for (var i = 0; i < checkedSigns.length; i++) {
+      for (var j = 0; j < dangerSignsL1.length; j++) {
+        if (checkedSigns[i] === dangerSignsL1[j]) { hasL1 = true; break; }
+      }
+      if (hasL1) { break; }
+    }
+    if (hasL1 || pain >= 9) { return 1; }
+    if (pain >= 7 || checkedSigns.length >= 2) { return 2; }
+    if (pain >= 5 || checkedSigns.length >= 1) { return 3; }
+    return 4;
+  }
+
+  function levelConfig(level) {
+    if (level === 1) { return { color: "#c62828", label: "IMMEDIATE",   darkText: false }; }
+    if (level === 2) { return { color: "#e65100", label: "VERY URGENT", darkText: false }; }
+    if (level === 3) { return { color: "#f9a825", label: "URGENT",      darkText: true  }; }
+    return               { color: "#2e7d32", label: "STANDARD",    darkText: false };
+  }
+
+  function localRecommendation(level) {
+    if (level === 1) { return "Your symptoms suggest a potentially life-threatening condition. Emergency care is required immediately. Please alert staff now."; }
+    if (level === 2) { return "Your symptoms require urgent medical evaluation within the next 30 minutes. Please proceed to the emergency reception desk."; }
+    if (level === 3) { return "Your symptoms should be assessed by a doctor today. Please book an appointment or visit an outpatient clinic soon."; }
+    return "Your symptoms appear stable. A routine appointment is recommended. You may also review our general health tips.";
+  }
+
+  /* =============================================
+     RENDER HELPERS
+  ============================================= */
+  function getBody()   { return document.getElementById("cardBody"); }
+  function getFooter() { return document.getElementById("cardFooter"); }
+
+  function showFooter(show) {
+    var f = getFooter();
+    if (show) {
+      f.className = "card-footer";
+    } else {
+      f.className = "card-footer hidden";
+    }
+  }
+
+  function updateHeader() {
+    document.getElementById("stepIndicator").textContent = "Step " + currentStep + " of " + TOTAL_STEPS;
+    document.getElementById("progressBar").style.width = ((currentStep / TOTAL_STEPS) * 100) + "%";
+    /* hide top back on step 1 (use footer back) */
+    if (currentStep === 1) {
+      document.getElementById("topBackBtn").style.visibility = "visible";
+    }
+  }
+
+  function setErrorHint(msg) {
+    var el = document.getElementById("errorHint");
+    if (el) { el.textContent = msg || ""; }
+  }
+
+  /* =============================================
+     STEP 1 — CHIEF COMPLAINT
+  ============================================= */
+  var COMPLAINTS = [
+    { key: "heart",     label: "\u2764\uFE0F Chest / Heart" },
+    { key: "breathing", label: "\uD83E\uDEC1 Breathing" },
+    { key: "neuro",     label: "\uD83E\uDDE0 Head / Neuro" },
+    { key: "pain",      label: "\uD83E\uDD15 Pain / Injury" },
+    { key: "fever",     label: "\uD83C\uDF21\uFE0F Fever / Infection" },
+    { key: "other",     label: "\uD83D\uDCAC Other" }
+  ];
+
+  function renderStep1() {
+    updateHeader();
+    showFooter(true);
+    document.getElementById("footerBackBtn").disabled = false;
+    document.getElementById("footerNextBtn").disabled = false;
+
+    var html = "";
+    html += "<div class='step-question' data-i18n='triage_q1'>What is your main concern today?</div>";
+    html += "<div class='complaint-grid' id='complaintGrid'>";
+    for (var i = 0; i < COMPLAINTS.length; i++) {
+      var c = COMPLAINTS[i];
+      var sel = (STATE.chiefComplaint === c.key) ? " selected" : "";
+      html += "<button class='complaint-btn" + sel + "' data-key='" + c.key + "' data-label='" + c.label + "' onclick='selectComplaint(this)'>" + c.label + "</button>";
+    }
+    html += "</div>";
+    html += "<div class='error-hint' id='errorHint'></div>";
+
+    getBody().innerHTML = html;
+  }
+
+  /* global so onclick= can reach it */
+  window.selectComplaint = function (btn) {
+    var grid = document.getElementById("complaintGrid");
+    var btns = grid.getElementsByClassName("complaint-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].className = "complaint-btn";
+    }
+    btn.className = "complaint-btn selected";
+    STATE.chiefComplaint = btn.getAttribute("data-key");
+    STATE.chiefLabel     = btn.getAttribute("data-label");
+    setErrorHint("");
+  };
+
+  function validateStep1() {
+    if (!STATE.chiefComplaint) {
+      setErrorHint("Please select your main concern to continue.");
+      return false;
+    }
+    return true;
+  }
+
+  /* =============================================
+     STEP 2 — PAIN SCORE
+  ============================================= */
+  function renderStep2() {
+    updateHeader();
+    showFooter(true);
+    document.getElementById("footerNextBtn").disabled = false;
+
+    var html = "";
+    html += "<div class='step-question' data-i18n='triage_q2'>How would you rate your pain or discomfort?</div>";
+    html += "<div class='pain-row' id='painRow'>";
+    for (var i = 1; i <= 10; i++) {
+      var cls = "pain-btn ";
+      if (i <= 3)  { cls += "green"; }
+      else if (i <= 6) { cls += "orange"; }
+      else         { cls += "red"; }
+      if (STATE.painScore === i) { cls += " selected"; }
+      html += "<button class='" + cls + "' data-val='" + i + "' onclick='selectPain(this)'>" + i + "</button>";
+    }
+    html += "</div>";
+    html += "<div class='pain-labels'><span data-i18n='triage_no_pain'>No Pain</span><span data-i18n='triage_worst_pain'>Worst Pain</span></div>";
+    html += "<div class='error-hint' id='errorHint'></div>";
+
+    getBody().innerHTML = html;
+  }
+
+  window.selectPain = function (btn) {
+    var row = document.getElementById("painRow");
+    var btns = row.getElementsByClassName("pain-btn");
+    for (var i = 0; i < btns.length; i++) {
+      /* remove selected, keep color class */
+      var cls = btns[i].className.replace(" selected", "");
+      btns[i].className = cls;
+    }
+    btn.className = btn.className + " selected";
+    STATE.painScore = parseInt(btn.getAttribute("data-val"), 10);
+    setErrorHint("");
+  };
+
+  function validateStep2() {
+    if (!STATE.painScore) {
+      setErrorHint("Please select a pain score.");
+      return false;
+    }
+    return true;
+  }
+
+  /* =============================================
+     STEP 3 — DANGER SIGNS
+  ============================================= */
+  function renderStep3() {
+    updateHeader();
+    showFooter(true);
+    document.getElementById("footerNextBtn").disabled = false;
+
+    var signs = DANGER_SIGNS[STATE.chiefComplaint] || DANGER_SIGNS["other"];
+
+    var html = "";
+    html += "<div class='step-question' data-i18n='triage_q3'>Please check all that apply:</div>";
+    html += "<div class='checkbox-list' id='checkList'>";
+    for (var i = 0; i < signs.length; i++) {
+      var label = signs[i];
+      var isChecked = false;
+      for (var k = 0; k < STATE.checkedSigns.length; k++) {
+        if (STATE.checkedSigns[k] === label) { isChecked = true; break; }
+      }
+      var rowCls = isChecked ? "check-row checked" : "check-row";
+      var boxContent = isChecked ? "&#10003;" : "";
+      html += "<div class='" + rowCls + "' data-label='" + label.replace(/'/g, "&#39;") + "' onclick='toggleSign(this)'>";
+      html +=   "<div class='check-box'>" + boxContent + "</div>";
+      html +=   "<div class='check-label'>" + label + "</div>";
+      html += "</div>";
+    }
+    html += "</div>";
+    html += "<div class='error-hint' id='errorHint'></div>";
+
+    getBody().innerHTML = html;
+  }
+
+  window.toggleSign = function (row) {
+    var label = row.getAttribute("data-label");
+    var box   = row.getElementsByClassName("check-box")[0];
+
+    if (row.className.indexOf("checked") !== -1) {
+      /* uncheck */
+      row.className = "check-row";
+      box.innerHTML = "";
+      var newSigns = [];
+      for (var i = 0; i < STATE.checkedSigns.length; i++) {
+        if (STATE.checkedSigns[i] !== label) { newSigns.push(STATE.checkedSigns[i]); }
+      }
+      STATE.checkedSigns = newSigns;
+    } else {
+      /* check */
+      row.className = "check-row checked";
+      box.innerHTML = "&#10003;";
+      STATE.checkedSigns.push(label);
+    }
+  };
+
+  /* Step 3 has no mandatory selection — user may have no danger signs */
+  function validateStep3() { return true; }
+
+  /* =============================================
+     STEP 4 — RESULT
+  ============================================= */
+  function renderStep4() {
+    updateHeader();
+    showFooter(false);
+
+    /* show spinner first */
+    getBody().innerHTML = "<div class='spinner-wrap'><div class='spinner'></div><div class='spinner-text' data-i18n='triage_assessing'>Assessing...</div></div>";
+
+    /* call backend */
+    var payload = JSON.stringify({
+      chiefComplaint: STATE.chiefComplaint,
+      painScore:      STATE.painScore,
+      symptoms:       STATE.checkedSigns
+    });
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/triage_assess", true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) { return; }
+      var level, recommendation, label;
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          level          = parseInt(data.level, 10) || localTriageLevel(STATE.chiefComplaint, STATE.painScore, STATE.checkedSigns);
+          recommendation = data.recommendation || localRecommendation(level);
+          label          = levelConfig(level).label;
+        } catch (e) {
+          level          = localTriageLevel(STATE.chiefComplaint, STATE.painScore, STATE.checkedSigns);
+          recommendation = localRecommendation(level);
+          label          = levelConfig(level).label;
+        }
+      } else {
+        level          = localTriageLevel(STATE.chiefComplaint, STATE.painScore, STATE.checkedSigns);
+        recommendation = localRecommendation(level);
+        label          = levelConfig(level).label;
+      }
+      renderResult(level, label, recommendation);
+    };
+    xhr.onerror = function () {
+      var level          = localTriageLevel(STATE.chiefComplaint, STATE.painScore, STATE.checkedSigns);
+      var recommendation = localRecommendation(level);
+      var label          = levelConfig(level).label;
+      renderResult(level, label, recommendation);
+    };
+    xhr.send(payload);
+  }
+
+  function renderResult(level, label, recommendation) {
+    var cfg = levelConfig(level);
+    var darkCls = cfg.darkText ? " dark-text" : "";
+
+    /* Save to STORE */
+    if (window.STORE && typeof STORE.addTriage === "function") {
+      STORE.addTriage({
+        chiefComplaint:  STATE.chiefComplaint,
+        chiefLabel:      STATE.chiefLabel,
+        painScore:       STATE.painScore,
+        symptoms:        STATE.checkedSigns,
+        level:           level,
+        label:           label,
+        recommendation:  recommendation
+      });
+    }
+
+    /* Build action button */
+    var actionBtnHtml = "";
+    if (level === 1) {
+      actionBtnHtml = "<button class='result-action-btn' style='background:#c62828;' onclick='actionLevel1()'>\uD83D\uDEA8 Alert Emergency Staff</button>";
+    } else if (level === 2) {
+      actionBtnHtml = "<button class='result-action-btn' style='background:#e65100;' onclick=\"window.location.href='emergency.html'\">\uD83C\uDFE5 Go to Emergency Reception</button>";
+    } else if (level === 3) {
+      actionBtnHtml = "<button class='result-action-btn' style='background:#b89a6c;' onclick=\"window.location.href='book.html'\">\uD83D\uDCC5 Book Appointment</button>";
+    } else {
+      actionBtnHtml = "<button class='result-action-btn' style='background:#2e7d32;' onclick=\"window.location.href='tips.html'\">\u2705 View Health Tips</button>";
+    }
+
+    /* Pain score display */
+    var painColor = STATE.painScore <= 3 ? "#4caf50" : (STATE.painScore <= 6 ? "#ff9800" : "#c62828");
+    var painText  = STATE.painScore + " / 10";
+
+    var html = "";
+    html += "<div class='result-wrap'>";
+    html +=   "<div class='level-circle" + darkCls + "' style='background:" + cfg.color + ";'>";
+    html +=     "<div class='level-num'>" + level + "</div>";
+    html +=     "<div class='level-label'>" + label + "</div>";
+    html +=   "</div>";
+
+    html +=   "<div class='result-info'>";
+    html +=     "<div class='result-info-row'>";
+    html +=       "<span class='result-info-key' data-i18n='triage_chief_complaint'>Chief Complaint</span>";
+    html +=       "<span class='result-info-val'>" + (STATE.chiefLabel || STATE.chiefComplaint) + "</span>";
+    html +=     "</div>";
+    html +=     "<div class='result-info-row'>";
+    html +=       "<span class='result-info-key' data-i18n='triage_pain_score'>Pain Score</span>";
+    html +=       "<span class='result-info-val' style='color:" + painColor + ";'>" + painText + "</span>";
+    html +=     "</div>";
+    if (STATE.checkedSigns.length > 0) {
+      html +=   "<div class='result-info-row'>";
+      html +=     "<span class='result-info-key' data-i18n='triage_danger_signs'>Danger Signs</span>";
+      html +=     "<span class='result-info-val'>" + STATE.checkedSigns.length + " flagged</span>";
+      html +=   "</div>";
+    }
+    html +=   "</div>";
+
+    html +=   "<div class='result-recommendation'>" + recommendation + "</div>";
+
+    html +=   actionBtnHtml;
+
+    html +=   "<a class='start-over-link' onclick='startOver()' data-i18n='triage_start_over'>&#8592; Start Over</a>";
+    html += "</div>";
+
+    getBody().innerHTML = html;
+  }
+
+  /* Level-1 action: alert staff + WS + redirect */
+  window.actionLevel1 = function () {
+    wsSend({ type: "say", text: "Emergency! Patient needs immediate assistance!" });
+    if (window.STORE && typeof STORE.addEmergency === "function") {
+      STORE.addEmergency("Triage Level 1: Immediate - " + (STATE.chiefLabel || STATE.chiefComplaint));
+    }
+    setTimeout(function () {
+      window.location.href = "emergency.html";
+    }, 1500);
+  };
+
+  /* =============================================
+     NAVIGATION
+  ============================================= */
+  function renderStep(step) {
+    /* Reset checked signs when re-entering step 3 after complaint change */
+    if (step === 3) { STATE.checkedSigns = []; }
+    if (step === 1) { renderStep1(); }
+    else if (step === 2) { renderStep2(); }
+    else if (step === 3) { renderStep3(); }
+    else if (step === 4) { renderStep4(); }
+  }
+
+  window.goNext = function () {
+    var valid = false;
+    if (currentStep === 1) { valid = validateStep1(); }
+    else if (currentStep === 2) { valid = validateStep2(); }
+    else if (currentStep === 3) { valid = validateStep3(); }
+    if (!valid) { return; }
+    if (currentStep < TOTAL_STEPS) {
+      currentStep += 1;
+      renderStep(currentStep);
+    }
+  };
+
+  window.goBack = function () {
+    if (currentStep > 1) {
+      currentStep -= 1;
+      renderStep(currentStep);
+    } else {
+      history.back();
+    }
+  };
+
+  window.topBack = function () {
+    history.back();
+  };
+
+  window.startOver = function () {
+    STATE.chiefComplaint = null;
+    STATE.chiefLabel     = null;
+    STATE.painScore      = null;
+    STATE.checkedSigns   = [];
+    currentStep = 1;
+    renderStep(1);
+  };
+
+  /* =============================================
+     BOOT
+  ============================================= */
+  renderStep(1);
+
+}());
+</script>
+</body>
+</html>

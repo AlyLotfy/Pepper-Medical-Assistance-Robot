@@ -1,0 +1,30 @@
+Navigation System — What Was Built
+New folder: Pepper-Controller-main-2/navigation/
+File
+Purpose
+navigation_targets.json
+Single source of truth for room coordinates. Edit this to add/move stations.
+nav_bridge.py
+Python 2.7 — Robot side. Connects to the WS bridge and executes navigation commands.
+nav_manager.py
+Python 3 — Backend helper that reads the JSON file. Can run standalone to verify targets.
+map_exploration.py
+Python 2.7 — Run once to build the SLAM map (prototype_room.explo).
+
+Modified files
+app.py — Added GET /api/navigation_targets endpoint
+guide.html — Replaced static search with dynamic navigation buttons
+main.py — Added start_nav_bridge() process launch
+
+How to Run for the Demo
+Without a SLAM map (simpler, works right away):
+nav_bridge.py uses ALMotion.moveTo(x, y, theta) — Pepper moves relative to where it's standing. Edit navigation_targets.json coordinates to match your room layout.
+With a SLAM map (full obstacle avoidance):
+Run map_exploration.py once to scan the room → saves prototype_room.explo
+nav_bridge.py auto-detects the map and uses navigateToInMap() instead
+Prototype room stations (in navigation_targets.json):
+Station A — 1.5m forward
+Station B — 1.5m left, facing 90°
+Station C — 1.2m forward + 1.0m left, diagonal
+Reception — returns to start [0, 0, 0]
+

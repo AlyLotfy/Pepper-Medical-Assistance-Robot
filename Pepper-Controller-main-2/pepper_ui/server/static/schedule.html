@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Doctor Schedule</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    *{box-sizing:border-box;}
+    body{
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f7f4f0, #ffffff);
+      background: linear-gradient(135deg, #f7f4f0, #ffffff);
+      color: #5a4a3b;
+      height: 100vh; margin: 0; overflow: hidden;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+    }
+    .card{
+      background: #fff; border-radius: 24px;
+      box-shadow: 0 10px 24px rgba(5,31,60,.10);
+      padding: 30px; width: 90%; max-width: 500px;
+      text-align: left;
+    }
+    h1{ text-align: center; margin-top: 0; }
+    label{ display: block; margin: 15px 0 5px; font-weight: bold; }
+    select{
+      width: 100%; padding: 12px; border-radius: 12px;
+      border: 1px solid #ddd; background: #fff; font-size: 16px;
+      -webkit-appearance: none; outline: none;
+    }
+    select:focus { border-color: #b89a6c; }
+    #resultBox{
+      margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee;
+      color: #8a7b6b; line-height: 1.5;
+    }
+    strong{ color: #5a4a3b; }
+    .back-btn {
+      position: absolute; top: 20px; left: 20px;
+      width: 44px; height: 44px;
+      background: #b89a6c; color: #fff;
+      border-radius: 50%; border: none; font-size: 24px; cursor: pointer;
+    }
+    [dir="rtl"] .back-btn { left: auto; right: 20px; }
+  </style>
+</head>
+<body>
+
+  <button class="back-btn" onclick="history.back()">&#8592;</button>
+
+  <div class="card">
+    <h1 data-i18n="schedule_title">Doctor Schedule</h1>
+
+    <label data-i18n="department">Department</label>
+    <select id="dept"><option>Loading...</option></select>
+
+    <label data-i18n="doctor">Doctor</label>
+    <select id="doctor" disabled><option>Select Department First</option></select>
+
+    <div id="resultBox"></div>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="ui_data.js"></script>
+  <script>
+  var deptSelect = document.getElementById('dept');
+  var docSelect  = document.getElementById('doctor');
+  var resBox     = document.getElementById('resultBox');
+
+  function safeText(t) { return (t === undefined || t === null) ? '' : String(t); }
+
+  function resetDoctors() {
+    docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_dept_first') + '</option>';
+    docSelect.disabled = true;
+  }
+
+  (function loadDepartments() {
+    if (!window.UI_DATA || !UI_DATA.departments) {
+      deptSelect.innerHTML = '<option value="" disabled selected>No departments (ui_data.js missing)</option>';
+      return;
+    }
+    deptSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_department') + '</option>';
+    for (var i = 0; i < UI_DATA.departments.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = UI_DATA.departments[i];
+      opt.text  = UI_DATA.departments[i];
+      deptSelect.add(opt);
+    }
+  })();
+
+  deptSelect.addEventListener('change', function () {
+    var selectedDept = deptSelect.value;
+    resBox.innerHTML = '';
+    docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_doctor') + '</option>';
+    docSelect.disabled = true;
+
+    if (!window.UI_DATA || !UI_DATA.doctors) {
+      resetDoctors();
+      resBox.innerHTML = 'ui_data.js missing doctors list.';
+      return;
+    }
+
+    var count = 0;
+    for (var i = 0; i < UI_DATA.doctors.length; i++) {
+      var d = UI_DATA.doctors[i];
+      if (d.department === selectedDept) {
+        var opt = document.createElement('option');
+        opt.value = d.id;
+        opt.text  = d.name;
+        docSelect.add(opt);
+        count++;
+      }
+    }
+
+    if (count === 0) {
+      docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('no_doctors_found') + '</option>';
+    } else {
+      docSelect.disabled = false;
+    }
+  });
+
+  docSelect.addEventListener('change', function () {
+    var doctorId = docSelect.value;
+    resBox.innerHTML = I18N.t('loading');
+
+    if (!window.UI_DATA || !UI_DATA.schedule) {
+      resBox.innerHTML = 'ui_data.js missing schedule.';
+      return;
+    }
+
+    var schedule = UI_DATA.schedule[doctorId];
+    if (!schedule || schedule.length === 0) {
+      resBox.innerHTML = 'No schedule found for this doctor.';
+      return;
+    }
+
+    var doctorName = docSelect.options[docSelect.selectedIndex].text;
+    var html = '<strong>Schedule for ' + safeText(doctorName) + ':</strong><br><br>';
+    for (var i = 0; i < schedule.length; i++) {
+      var s = schedule[i];
+      html += safeText(s.day) + ': ' + safeText(s.start) + ' &ndash; ' + safeText(s.end) + '<br>';
+    }
+    resBox.innerHTML = html;
+  });
+
+  resetDoctors();
+  if (window.I18N) I18N.applyI18n();
+  </script>
+</body>
+</html>

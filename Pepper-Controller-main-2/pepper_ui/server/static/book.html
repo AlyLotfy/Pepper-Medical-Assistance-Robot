@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Book Appointment</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f7f4f0, #ffffff);
+      background: linear-gradient(135deg, #f7f4f0, #ffffff);
+      margin: 0; padding: 0;
+      height: 100vh; overflow: hidden;
+      display: block; text-align: center;
+    }
+    .card {
+      background: #ffffff; width: 90%; max-width: 500px;
+      margin: 20px auto; border-radius: 24px;
+      box-shadow: 0 10px 30px rgba(184,154,108,0.15);
+      padding: 30px; text-align: left;
+      max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    }
+    h1 { margin: 0 0 20px 0; font-size: 24px; color: #5a4a3b; text-align: center; font-weight: bold; }
+    label { display: block; margin: 15px 0 5px; font-size: 13px; font-weight: bold; color: #5a4a3b; }
+    input, select {
+      width: 100%; padding: 14px; font-size: 16px; color: #5a4a3b;
+      border: 1px solid #ddd; border-radius: 12px;
+      background: #fff; outline: none; -webkit-appearance: none;
+    }
+    input:focus, select:focus { border-color: #b89a6c; }
+    .btn-submit {
+      width: 100%; padding: 16px; margin-top: 25px;
+      background: #b89a6c; color: #fff; border: none; border-radius: 12px;
+      font-size: 18px; font-weight: bold; cursor: pointer;
+      box-shadow: 0 5px 15px rgba(184,154,108,0.3);
+    }
+    .btn-submit:active { background: #9e7f54; transform: translateY(2px); }
+    .btn-submit:disabled { background: #ccc; box-shadow: none; }
+    .back-btn {
+      position: absolute; top: 20px; left: 20px;
+      width: 45px; height: 45px; background: #b89a6c; color: white;
+      border-radius: 50%; border: none; font-size: 24px; font-weight: bold;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1); cursor: pointer; z-index: 100;
+    }
+    #msgBox { margin-top: 20px; text-align: center; font-weight: bold; min-height: 20px; color: #8a7b6b; }
+    .steps { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; margin: 10px 0 16px 0; }
+    .steps .step { margin-right: 8px; margin-bottom: 4px; }
+    .step {
+      padding: 8px 10px; border-radius: 999px; background: #f2eee7;
+      color: #8a7b6b; font-size: 12px; font-weight: 700; border: 1px solid #eee;
+    }
+    .step.active { background: #b89a6c; color: #fff; border-color: #b89a6c; }
+    [dir="rtl"] .back-btn { left: auto; right: 20px; }
+  </style>
+</head>
+<body>
+
+  <button class="back-btn" onclick="history.back()">&#8592;</button>
+
+  <form class="card" id="booking-form">
+    <h1 data-i18n="book_appointment">Book Appointment</h1>
+
+    <div class="steps" id="stepsBar">
+      <div class="step active" id="s1" data-i18n="step_1_dept">1 Department</div>
+      <div class="step" id="s2" data-i18n="step_2_doctor">2 Doctor</div>
+      <div class="step" id="s3" data-i18n="step_3_datetime">3 Date &amp; Time</div>
+      <div class="step" id="s4" data-i18n="step_4_confirm">4 Confirm</div>
+    </div>
+
+    <label data-i18n="patient_name">Patient Name</label>
+    <input type="text" id="patientName" placeholder="Full Name" required>
+
+    <label data-i18n="department">Department</label>
+    <select id="dept" required>
+      <option value="" disabled selected>Loading departments...</option>
+    </select>
+
+    <label data-i18n="doctor">Doctor</label>
+    <select id="doctor" required disabled>
+      <option value="" disabled selected>Select Department First</option>
+    </select>
+
+    <label data-i18n="date">Date</label>
+    <input type="date" id="date" required>
+
+    <label data-i18n="time">Time</label>
+    <input type="time" id="time" required>
+
+    <div id="msgBox"></div>
+
+    <button type="submit" class="btn-submit" id="submitBtn" data-i18n="confirm_booking">Confirm Booking</button>
+  </form>
+
+  <script src="i18n.js"></script>
+  <script src="ui_data.js"></script>
+  <script src="demo_store.js"></script>
+
+  <script>
+  function setMsg(el, text, color) { el.textContent = text || ''; el.style.color = color || '#8a7b6b'; }
+
+  function setStep(n) {
+    var ids = ['s1','s2','s3','s4'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el) el.className = 'step' + ((i + 1) === n ? ' active' : '');
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var deptSelect = document.getElementById('dept');
+    var docSelect  = document.getElementById('doctor');
+    var form       = document.getElementById('booking-form');
+    var msg        = document.getElementById('msgBox');
+    var btn        = document.getElementById('submitBtn');
+    var nameInput  = document.getElementById('patientName');
+
+    if (window.I18N) I18N.applyI18n();
+    setStep(1);
+
+    // Pre-fill name if logged in
+    try {
+      var me0 = (window.STORE && STORE.me) ? STORE.me() : null;
+      if (me0 && me0.name) nameInput.value = me0.name;
+    } catch (e) {}
+
+    // Load departments from UI_DATA
+    try {
+      var depts = (window.UI_DATA && UI_DATA.departments) ? UI_DATA.departments : [];
+      deptSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_department') + '</option>';
+      for (var i = 0; i < depts.length; i++) {
+        deptSelect.appendChild(new Option(depts[i], depts[i]));
+      }
+    } catch (e) {
+      deptSelect.innerHTML = '<option value="" disabled selected>No departments available</option>';
+    }
+
+    deptSelect.addEventListener('change', function () {
+      setStep(2);
+      setMsg(msg, '');
+      var dept = deptSelect.value;
+      var docs = (window.UI_DATA && UI_DATA.doctors) ? UI_DATA.doctors : [];
+      docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_doctor') + '</option>';
+      var count = 0;
+      for (var j = 0; j < docs.length; j++) {
+        if (docs[j].department === dept) {
+          docSelect.appendChild(new Option(docs[j].name, docs[j].name));
+          count++;
+        }
+      }
+      docSelect.disabled = (count === 0);
+      if (count === 0) {
+        docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('no_doctors_found') + '</option>';
+      }
+    });
+
+    docSelect.addEventListener('change', function () { if (docSelect.value) setStep(3); });
+    document.getElementById('date').addEventListener('change', function () { setStep(3); });
+    document.getElementById('time').addEventListener('change', function () { setStep(3); });
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var patientName = nameInput.value;
+      var doctorName  = docSelect.value;
+      var dateVal     = document.getElementById('date').value;
+      var timeVal     = document.getElementById('time').value;
+
+      if (!patientName || !doctorName || !dateVal || !timeVal) {
+        setMsg(msg, I18N.t('fill_all_fields'), '#d9534f');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = I18N.t('booking_dots');
+      setMsg(msg, '');
+
+      var resp = null;
+      try { resp = STORE.book(doctorName, dateVal, timeVal); }
+      catch (e3) { resp = { success: false, error: 'Storage error' }; }
+
+      btn.disabled = false;
+      btn.textContent = I18N.t('confirm_booking');
+
+      if (resp && resp.success) {
+        setStep(4);
+        setMsg(msg, I18N.t('appointment_confirmed'), 'green');
+
+        try {
+          var me = (window.STORE && STORE.me) ? STORE.me() : null;
+          if (me && me.id) localStorage.setItem('hasNewAppointments_' + me.id, '1');
+        } catch (eFlag) {}
+
+        /* Real-time sync: notify staff dashboards via WebSocket */
+        try {
+          var wsHost = window.location.hostname || '127.0.0.1';
+          var notifyWs = new WebSocket('ws://' + wsHost + ':8765');
+          notifyWs.onopen = function () {
+            notifyWs.send(JSON.stringify({
+              type: 'appointment_booked',
+              doctor: doctorName,
+              date: dateVal,
+              time: timeVal,
+              patient: patientName
+            }));
+            setTimeout(function () { notifyWs.close(); }, 500);
+          };
+        } catch (wsErr) {}
+
+        var keepName = patientName;
+        form.reset();
+        nameInput.value = keepName;
+        docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_dept_first') + '</option>';
+        docSelect.disabled = true;
+        setTimeout(function () { setStep(1); }, 1500);
+      } else {
+        setMsg(msg, I18N.t('booking_failed', (resp && resp.error) || 'Unknown error'), '#d9534f');
+      }
+    });
+  });
+  </script>
+</body>
+</html>

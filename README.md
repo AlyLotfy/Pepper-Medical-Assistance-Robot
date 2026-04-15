@@ -1,159 +1,417 @@
 # Pepper Medical Assistance Robot
 
-A graduation project developed by AAST College of Artificial Intelligence (Alamein Campus).
-This project leverages Pepper Robot, AI, and Edge Computing to create an intelligent medical assistant for hospitals — capable of interacting with patients through speech, tablet UI, and gesture control.
+> **AAST Graduation Project** — An intelligent humanoid hospital receptionist powered by SoftBank's Pepper robot, combining voice AI, face recognition, multilingual interaction, and autonomous navigation for Andalusia Hospital.
 
-## Project Overview
+---
 
-The Pepper Medical Assistance Robot acts as a bilingual (Arabic/English) hospital assistant designed to support patients and staff.
-It can speak, guide, answer questions, and perform simple triage tasks while maintaining privacy and accessibility.
+## Table of Contents
 
-### Core Features
-- Reception & Check-In: Confirms appointments using ID/QR codes.
-- Queue Management: Displays wait times and notifies patients.
-- FAQs & Guidance: Answers hospital-related questions (visiting hours, insurance, etc.).
-- Wayfinding Assistance: Directs patients to departments.
-- Simple Triage: Asks structured health questions and alerts nurses for urgent cases.
-- Accessibility: Voice + touch interface with Arabic/English support.
+- [Overview](#overview)
+- [System Architecture](#system-architecture)
+- [Features](#features)
+- [Technology Stack](#technology-stack)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running the Project](#running-the-project)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+- [Offline Mode](#offline-mode)
+- [Team](#team)
+
+---
+
+## Overview
+
+Pepper Medical Assistance Robot transforms Pepper, a humanoid social robot, into a fully functional hospital receptionist for Andalusia Hospital. Patients interact naturally — by voice or touch — in **Arabic or English**, and Pepper responds intelligently, books appointments, guides navigation, detects emergencies, and personalizes every interaction using face recognition.
+
+The system runs entirely on a local LAN connection between a Windows laptop (server) and the Pepper robot, with no cloud dependency when using offline mode.
+
+![Pepper Robot](Pepper-Controller-main-2/pepper_ui/server/static/Pepper.jpg)
+
+---
 
 ## System Architecture
 
-Think of the system as three connected layers:
-
-### 1. Pepper Layer (`robot/`)
-- Runs on Python 2.7 with the NAOqi SDK.
-- Handles robot speech, tablet display, and motion.
-- File: `bridge.py` → WebSocket client connecting Pepper ↔ Backend.
-- Functions:
-  - TTS: Text-to-speech via `ALTextToSpeech`
-  - Tablet: Displays HTML UI via `ALTabletService`
-  - Alert: Nurse call command
-
-### 2. Backend Layer (`server/`)
-- Built with FastAPI (Python 3.x) for modular and efficient communication.
-- Core files:
-  - `main.py` → API endpoints (`/api/speak`, `/api/faq/search`, `/api/triage/submit`)
-  - `rag.py` → FAQ retrieval (local RAG-based)
-  - `triage.py` → Simple rule-based scoring system
-  - `bridge_bus.py` → WebSocket publisher (sends messages to Pepper)
-
-All communication between the UI, logic, and robot happens here.
-
-### 3. User Interface Layer (`pepper_ui/`)
-- A web app displayed on Pepper’s tablet.
-- Built with HTML, CSS, and JavaScript.
-- Structure:
-  - `index.html`: Tabs for Check-In, FAQ, and Triage
-  - `style.css`: Large fonts and buttons for elderly accessibility
-  - `script.js`: Uses `fetch()` to send API requests to backend
-
-## Data Flow (Pipeline)
-
-1. Patient Interaction – The user types or speaks a query on Pepper’s tablet.
-2. UI → Backend – The UI sends the request to FastAPI (`/api/faq/search`).
-3. Backend Logic – `rag.py` finds an appropriate answer from the FAQ index.
-4. Backend → Bridge – The answer is published via WebSocket (`bridge_bus.py`).
-5. Bridge → Pepper – Pepper speaks the response through `ALTextToSpeech` and displays it on the tablet.
-
-Everything runs locally (edge-based) → ensuring privacy, low latency, and reliability.
-
-## Repository Structure
-
 ```
-GRADUATION PROJECT/
-│
-├─ pepper_env/               # Virtual environment (auto-generated)
-│
-├─ robot/                    # Pepper bridge (Python 2.7, NAOqi)
-│   ├─ bridge.py
-│   ├─ config.ini
-│   └─ __init__.py
-│
-├─ server/                   # Backend (Python 3.x, FastAPI)
-│   ├─ app/
-│   │   ├─ main.py
-│   │   ├─ rag.py
-│   │   ├─ triage.py
-│   │   ├─ bridge_bus.py
-│   │   └─ __init__.py
-│   ├─ tools/
-│   │   └─ build_faq_index.py
-│   ├─ .env
-│   └─ requirements.txt
-│
-├─ pepper_ui/                # Tablet web app
-│   ├─ index.html
-│   ├─ style.css
-│   └─ script.js
-│
-├─ Proposals/
-│
-├─ Scripts/
-│   └─ run_all.bat           # Run server + bridge together
-│
-└─ pynaoqi-.../lib/naoqi.py  # NAOqi SDK
+┌─────────────────────────────────────────────────────────────────┐
+│                         WINDOWS LAPTOP                          │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              Flask Backend  (Python 3, port 8080)         │  │
+│  │                                                           │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐  │  │
+│  │  │ Whisper STT │  │  Claude API  │  │  Ollama (local) │  │  │
+│  │  │ (CTranslate)│  │  (online)    │  │  qwen2.5:7b     │  │  │
+│  │  └─────────────┘  └──────────────┘  └─────────────────┘  │  │
+│  │                                                           │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐  │  │
+│  │  │  FAISS RAG  │  │  Face Auth   │  │  Hospital DB    │  │  │
+│  │  │  (hospital  │  │  (OpenCV)    │  │  (SQLite)       │  │  │
+│  │  │   knowledge)│  └──────────────┘  └─────────────────┘  │  │
+│  │  └─────────────┘                                         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                  │
+│  ┌──────────────────────┐    │    ┌──────────────────────────┐  │
+│  │  WebSocket Bridge    │◄───┘    │  Camera Server           │  │
+│  │  (port 8765)         │         │  (port 8082, Python 2.7) │  │
+│  └──────────┬───────────┘         └──────────────────────────┘  │
+└─────────────┼───────────────────────────────────────────────────┘
+              │  LAN Cable (192.168.x.x)
+┌─────────────┼───────────────────────────────────────────────────┐
+│             │         PEPPER ROBOT (NAOqi 2.8)                  │
+│  ┌──────────▼───────────┐  ┌──────────────────────────────────┐ │
+│  │  NAOqi WebSocket     │  │  Tablet Browser                  │ │
+│  │  (MainVoice.py)      │  │  → Flask server UI               │ │
+│  │  (nav_bridge.py)     │  │  → Arabic/English touch UI       │ │
+│  └──────────────────────┘  └──────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Setup & Activation
+---
 
-Follow the Week 1 Activation Guide for Pepper setup:
+## Features
 
-1. Install Requirements
-   - Pepper Robot (NAOqi 2.8/2.9)
-   - Python 2.7 (64-bit)
-   - pynaoqi SDK for Windows
-   - Python 3.x for backend
-   - Virtualenv installed (`pip install virtualenv`)
+### Patient-Facing Capabilities
+- **Voice Interaction** — Speak to Pepper in Arabic or English; Whisper STT transcribes in real time (~0.9s latency)
+- **AI Conversation** — Intelligent responses via Claude API (online) or Ollama/qwen2.5:7b (offline), with full agentic tool calling
+- **Appointment Booking** — Book, view, and cancel doctor appointments by voice or touch
+- **Hospital Navigation** — Pepper physically guides patients to departments and wards
+- **Face Recognition Login** — Patients are recognized by face on arrival; no typing needed
+- **Emergency Detection** — Automatic triage and alerts for urgent conditions
+- **Health Tips** — Context-aware wellness suggestions in the patient's language
+- **Symptom Checker** — Basic symptom-to-department routing with urgency scoring
+- **Doctor Schedules** — Real-time availability lookup for all Andalusia Hospital departments
 
-2. Create Environment
-   ```bash
-   virtualenv -p "C:\Python27\python.exe" pepper_env
-   .\pepper_env\Scripts\activate
-   ```
+### Technical Capabilities
+- **Bilingual UI** — Full Arabic/English tablet interface with RTL support
+- **RAG Knowledge Base** — FAISS-indexed Andalusia Hospital corpus for accurate, grounded answers
+- **Sentiment Analysis** — Detects patient stress or urgency and adjusts response tone
+- **Emotion Detection** — OpenCV-based expression reading from tablet camera
+- **Medical NER** — Extracts symptoms, medications, and body parts from free-text
+- **Conversation Memory** — Per-session context retention across multi-turn dialogue
+- **Offline Mode** — Full functionality without internet using local Ollama LLM
+- **QR Check-in** — Fast check-in via QR code scan on the tablet
 
-3. Add NAOqi SDK to Environment
-   ```powershell
-   $SDK = "C:\SDK\pynaoqi-python2.7-2.8.6.23-win64-vs2015"
-   $env:PYTHONPATH = "$SDK\lib;$SDK\lib\python2.7\site-packages;$env:PYTHONPATH"
-   $env:PATH       = "$SDK\lib;$env:PATH"
-   ```
+---
 
-4. Test Connection
-   ```python
-   from naoqi import ALProxy
-   tts = ALProxy("ALTextToSpeech", "<PEPPER_IP>", 9559)
-   tts.say("Hello, I am Pepper!")
-   ```
+## Technology Stack
 
-5. Run Backend & UI
-   ```bash
-   cd server
-   uvicorn app.main:app --reload
-   python robot/bridge.py
-   ```
+| Layer | Technology |
+|---|---|
+| Robot Platform | SoftBank Pepper (NAOqi 2.8, Python 2.7) |
+| Backend Server | Python 3.13, Flask 3, SQLAlchemy |
+| Speech-to-Text | faster-whisper (CTranslate2, int8 quantized) |
+| AI — Online | Anthropic Claude API (claude-haiku-4-5) |
+| AI — Offline | Ollama + qwen2.5:7b (native tool calling) |
+| Knowledge Base | FAISS + sentence-transformers RAG |
+| Face Recognition | OpenCV LBPH face recognizer |
+| Database | SQLite (appointments, patients, doctors) |
+| Real-time Bridge | WebSocket (asyncio, port 8765) |
+| Robot Camera | HTTP MJPEG stream (port 8082) |
+| Tablet UI | HTML5/CSS3/Vanilla JS (touch-optimized) |
+| Networking | LAN Ethernet (robot ↔ laptop) |
 
-6. Access UI
-   Open Pepper’s tablet browser or PC browser at:
-   `http://<SERVER_IP>:8080`
+---
 
-## Team Members
-| Name | ID |
-|------|----|
-| Aly Ahmed Lotfy | 221000412 |
-| Amr Sherif Emara | 221000299 |
-| Youssef Ahmed Tawfik | 221001264 |
-| Abdelrahman Karam | 221002035 |
-| Mohamed El-Maghwary | 221001747 |
-| Amira El Sayed | 221002982 |
+## Prerequisites
 
-## Collaboration Partner
-Andalusia Hospital – Pilot testing and validation site.
+### Hardware
+- SoftBank Pepper robot (NAOqi 2.8.x firmware)
+- Windows 10/11 laptop connected to Pepper via LAN cable
+- Static IP assigned: laptop `1.1.1.249`, robot `1.1.1.10` (configurable)
 
-## Expected Outcomes
-- Working Pepper assistant deployed in a demo hospital environment.
-- Improved patient engagement and staff efficiency.
-- Pilot testing with Andalusia Hospital.
-- Academic publications on applied healthcare robotics.
+### Software — Windows Laptop
+- **Python 3.10+** (tested on 3.13)
+- **Python 2.7** (for NAOqi SDK scripts — robot-side only)
+- **NAOqi Python 2.7 SDK** (`pynaoqi-python2.7-2.8.x-win64`)
+  - Extract to `C:\pynaoqi\` and update path in `main.py`
+- **Ollama** (optional, for offline mode) — [ollama.com](https://ollama.com)
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/AlyLotfy/Pepper-Medical-Assistance-Robot.git
+cd Pepper-Medical-Assistance-Robot
+```
+
+### 2. Create and activate a Python 3 virtual environment
+
+```bash
+python -m venv pepper_env
+pepper_env\Scripts\activate      # Windows
+```
+
+### 3. Install Python 3 dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Set up your Anthropic API key (online mode)
+
+Create a `.env` file in the project root:
+
+```
+ANTHROPIC_API_KEY=your_api_key_here
+```
+
+Or set it as a system environment variable.
+
+### 5. Initialize the hospital database
+
+The hospital SQLite database (`hospital.db`) is auto-created on first run from the CSV/Excel data files in `Pepper-Controller-main-2/pepper_ui/server/app/Data/`.
+
+### 6. Build the RAG index (first-time only)
+
+```bash
+cd Pepper-Controller-main-2/pepper_ui/server/app
+python rag_engine.py
+```
+
+This creates `rag_index.faiss` and `rag_meta.json` from `rag_corpus.json`.
+
+### 7. (Offline only) Pull the Ollama model
+
+```bash
+ollama pull qwen2.5:7b
+```
+
+---
+
+## Configuration
+
+Copy the example config and fill in your network addresses:
+
+```bash
+cp config.example.json config.json
+```
+
+```json
+{
+    "ROBOT_IP": "1.1.1.10",
+    "ROBOT_PORT": 9559,
+    "SERVER_IP": "1.1.1.249",
+    "SERVER_PORT": 8080,
+    "WS_PORT": 8765
+}
+```
+
+| Field | Description |
+|---|---|
+| `ROBOT_IP` | Pepper robot's static LAN IP |
+| `ROBOT_PORT` | NAOqi broker port (always 9559) |
+| `SERVER_IP` | Laptop's LAN IP (what the tablet browser connects to) |
+| `SERVER_PORT` | Flask server port |
+| `WS_PORT` | WebSocket bridge port |
+
+---
+
+## Running the Project
+
+### Standard Mode (online, Claude API)
+
+```bash
+python main.py
+```
+
+### Offline Mode (local Ollama LLM, no internet required)
+
+```bash
+# In a separate terminal, start Ollama first:
+ollama serve
+
+# Then launch the project:
+python main.py --offline
+```
+
+### Server Only (no robot hardware — for development)
+
+```bash
+python main.py --server-only
+```
+
+The tablet UI is accessible at `http://<SERVER_IP>:<SERVER_PORT>` from any browser on the same network.
+
+### What `main.py` starts
+
+| Process | Runtime | Purpose |
+|---|---|---|
+| Flask backend (`app.py`) | Python 3 | REST API, AI chat, DB, RAG |
+| WebSocket bridge (`ws_bridge.py`) | Python 3 | Real-time robot↔server messaging |
+| Voice module (`MainVoice.py`) | Python 2.7 + NAOqi | Pepper microphone capture & TTS |
+| Navigation bridge (`nav_bridge.py`) | Python 2.7 + NAOqi | Autonomous robot navigation |
+| Camera server (`camera_server.py`) | Python 2.7 + NAOqi | Live camera feed to tablet |
+| Tablet loader (`show_tablet.py`) | Python 2.7 + NAOqi | Opens UI on Pepper's tablet screen |
+
+---
+
+## Project Structure
+
+```
+Pepper-Medical-Assistance-Robot/
+│
+├── main.py                          # Master launcher — starts all subsystems
+├── config.json                      # Network config (gitignored — use config.example.json)
+├── config.example.json              # Template for config.json
+├── requirements.txt                 # Python 3 dependencies
+├── load_config.py                   # Config loader helper
+├── generate_report.py               # Appointment report generator
+│
+├── Pepper-Controller-main-2/
+│   │
+│   ├── pepper_ui/
+│   │   ├── robot/
+│   │   │   ├── show_tablet.py       # Loads web UI onto Pepper's tablet (Py2)
+│   │   │   ├── camera_server.py     # HTTP camera stream server (Py2, port 8082)
+│   │   │   ├── camera_stream.py     # NAOqi camera capture helper
+│   │   │   ├── bridge.py            # Robot WebSocket client
+│   │   │   └── ui_bridge.py         # UI event bridge
+│   │   │
+│   │   └── server/
+│   │       ├── app/
+│   │       │   ├── app.py           # Flask server — all REST endpoints (1600+ lines)
+│   │       │   ├── rag_engine.py    # FAISS RAG retrieval engine
+│   │       │   ├── emotion_detector.py  # OpenCV emotion detection
+│   │       │   ├── rag_corpus.json  # Andalusia Hospital knowledge base
+│   │       │   ├── Branches.csv     # Hospital branches data
+│   │       │   ├── Doctors.csv      # Doctor roster
+│   │       │   ├── Departments.csv  # Department list
+│   │       │   ├── Data/            # Source Excel files for DB population
+│   │       │   └── ai_modules/
+│   │       │       ├── conversation_memory.py  # Per-session chat history
+│   │       │       ├── face_auth.py             # OpenCV face recognition
+│   │       │       ├── medical_ner.py           # Medical entity extraction
+│   │       │       ├── sentiment.py             # Patient sentiment analysis
+│   │       │       └── symptom_checker.py       # Symptom-to-department routing
+│   │       │
+│   │       └── static/              # Tablet web UI (HTML/CSS/JS)
+│   │           ├── index.html       # Home page — patient portal tiles
+│   │           ├── chat.html        # Voice/text AI chat interface
+│   │           ├── book.html        # Appointment booking
+│   │           ├── appointments.html  # View/cancel appointments
+│   │           ├── face_login.html  # Face recognition login
+│   │           ├── face_enroll.html # New patient face enrollment
+│   │           ├── login.html       # Username/password login
+│   │           ├── signup.html      # New patient registration
+│   │           ├── emergency.html   # Emergency alert page
+│   │           ├── triage.html      # Symptom triage form
+│   │           ├── schedule.html    # Doctor schedule viewer
+│   │           ├── guide.html       # Hospital directory
+│   │           ├── about.html       # About Pepper
+│   │           ├── tips.html        # Health tips
+│   │           ├── staff_dashboard.html  # Staff admin panel
+│   │           ├── qr_checkin.html  # QR code check-in
+│   │           ├── i18n.js          # Arabic/English translations
+│   │           └── style.css        # Tablet-optimized CSS
+│   │
+│   ├── pepper_voice/
+│   │   ├── MainVoice.py             # NAOqi voice capture loop + TTS (Py2)
+│   │   ├── ws_bridge.py             # WebSocket server for voice ↔ robot commands (Py3)
+│   │   └── pepper_voice.py          # NAOqi TTS helper
+│   │
+│   └── navigation/
+│       ├── nav_bridge.py            # Navigation WebSocket client (Py2, NAOqi)
+│       ├── nav_manager.py           # Navigation target manager
+│       ├── map_exploration.py       # Autonomous map learning
+│       └── navigation_targets.json  # Named locations in the hospital
+│
+└── Documents/                       # Project documentation & reports
+    ├── Pepper_Medical_Assistance.pdf
+    ├── Technical Report.pdf
+    ├── Pepper Pipeline.pdf
+    └── ...
+```
+
+---
+
+## API Reference
+
+All endpoints are served by the Flask backend on `http://<SERVER_IP>:<SERVER_PORT>`.
+
+### Voice & Chat
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/voice` | Submit audio file → returns AI text + TTS audio |
+| `POST` | `/chat` | Submit text message → returns AI response |
+| `GET` | `/language` | Get current UI language (`ar`/`en`) |
+| `POST` | `/language` | Set UI language |
+
+### Appointments
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/doctors` | List all doctors with availability |
+| `GET` | `/api/departments` | List all departments |
+| `POST` | `/api/book` | Book an appointment |
+| `GET` | `/api/appointments/<patient_id>` | Get patient appointments |
+| `DELETE` | `/api/appointments/<id>` | Cancel an appointment |
+
+### Authentication
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/login` | Username/password login |
+| `POST` | `/api/signup` | New patient registration |
+| `POST` | `/api/face/enroll` | Enroll face for a patient |
+| `POST` | `/api/face/login` | Authenticate via face recognition |
+
+### Navigation
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/navigate` | Send navigation command to Pepper |
+| `GET` | `/api/nav/targets` | List all named navigation targets |
+
+### Utilities
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/camera` | Latest JPEG frame from Pepper's camera |
+| `POST` | `/api/emergency` | Trigger emergency alert |
+| `GET` | `/api/health_tips` | Get contextual health tips |
+| `POST` | `/api/triage` | Symptom triage scoring |
+
+---
+
+## Offline Mode
+
+When started with `python main.py --offline`, the system:
+
+1. Replaces Claude API calls with **Ollama + qwen2.5:7b** running locally
+2. Uses the same tool-calling agentic loop (native Ollama tools format)
+3. All features work identically — booking, navigation, lookup — no internet required
+4. Whisper STT continues to run locally (always was local)
+5. RAG knowledge retrieval is unaffected (always local FAISS)
+
+**Requirements for offline mode:**
+- Ollama installed and running (`ollama serve`)
+- `qwen2.5:7b` model pulled (`ollama pull qwen2.5:7b`)
+- ~5GB disk space for the model
+
+---
+
+## Team
+
+**Arab Academy for Science, Technology & Maritime Transport (AAST)**
+Computer Engineering Department — Graduation Project 2025/2026
+
+| Name | Role |
+|---|---|
+| Aly Lotfy | Backend AI, Flask Server, Offline Mode |
+| [Team Member] | Navigation & Robot Control |
+| [Team Member] | Frontend UI & Tablet Interface |
+| [Team Member] | Face Recognition & Computer Vision |
+
+**Supervisor:** [Supervisor Name], AAST
+
+---
 
 ## License
-This project is for educational and research purposes under the AAST College of AI.
+
+This project was developed for academic purposes at AAST in partnership with Andalusia Hospital Group. All rights reserved.

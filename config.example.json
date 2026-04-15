@@ -1,0 +1,7 @@
+{
+    "ROBOT_IP": "192.168.1.100",
+    "ROBOT_PORT": 9559,
+    "SERVER_IP": "192.168.1.50",
+    "SERVER_PORT": 8080,
+    "WS_PORT": 8765
+}

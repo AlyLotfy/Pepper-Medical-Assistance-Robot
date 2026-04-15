@@ -1,0 +1,447 @@
+{
+  "description": "Andalusia Hospital - Pepper Navigation Targets (40 rooms)",
+  "note": "Coordinates [x_meters, y_meters, theta_radians] relative to robot start. Update after SLAM mapping.",
+  "prototype_mode": true,
+  "targets": [
+    {
+      "id": 1,
+      "name": "Dr. Ahmed Salem",
+      "specialty": "Cardiology",
+      "room_name": "Room 101 - First Floor",
+      "coordinates": [
+        1.5,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Dr. Mona Khaled",
+      "specialty": "Cardiology",
+      "room_name": "Room 102 - First Floor",
+      "coordinates": [
+        1.5,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Dr. Mohamed Fathy",
+      "specialty": "Cardiology",
+      "room_name": "Room 103 - First Floor",
+      "coordinates": [
+        1.5,
+        3.0,
+        1.0
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Dr. Layla Ibrahim",
+      "specialty": "Neurology",
+      "room_name": "Room 305 - Third Floor",
+      "coordinates": [
+        3.0,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Dr. Mohamed Hamdy",
+      "specialty": "Neurology",
+      "room_name": "Room 307 - Third Floor",
+      "coordinates": [
+        3.0,
+        2.0,
+        1.57
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Dr. Omar Farouk",
+      "specialty": "Internal Medicine",
+      "room_name": "Room 120 - First Floor",
+      "coordinates": [
+        1.2,
+        4.0,
+        0.0
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Dr. Hana Samir",
+      "specialty": "Pediatrics",
+      "room_name": "Room 215 - Second Floor",
+      "coordinates": [
+        2.15,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Dr. Amany Yahya",
+      "specialty": "Pediatrics",
+      "room_name": "Room 216 - Second Floor",
+      "coordinates": [
+        2.15,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Dr. Karim Adel",
+      "specialty": "ENT",
+      "room_name": "Room 310 - Third Floor",
+      "coordinates": [
+        3.1,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Dr. Rania Ghazy",
+      "specialty": "ENT",
+      "room_name": "Room 311 - Third Floor",
+      "coordinates": [
+        3.1,
+        2.0,
+        1.57
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Dr. Nadia Sami",
+      "specialty": "Radiology",
+      "room_name": "Room 050 - Ground Floor",
+      "coordinates": [
+        0.5,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Dr. Islam Mohamed",
+      "specialty": "Dermatology",
+      "room_name": "Room 130 - First Floor",
+      "coordinates": [
+        1.3,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Dr. Gamal Murad",
+      "specialty": "Dermatology",
+      "room_name": "Room 131 - First Floor",
+      "coordinates": [
+        1.3,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Dr. Mohamed Adly",
+      "specialty": "Ophthalmology",
+      "room_name": "Room 140 - First Floor",
+      "coordinates": [
+        1.4,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 15,
+      "name": "Dr. Ehab Ali",
+      "specialty": "Dentistry",
+      "room_name": "Room 060 - Ground Floor",
+      "coordinates": [
+        0.6,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Dr. Darine Mamdouh",
+      "specialty": "Dentistry",
+      "room_name": "Room 061 - Ground Floor",
+      "coordinates": [
+        0.6,
+        2.0,
+        0.0
+      ]
+    },
+    {
+      "id": 17,
+      "name": "Dr. Omar Abdelkhalek",
+      "specialty": "Pulmonology",
+      "room_name": "Room 220 - Second Floor",
+      "coordinates": [
+        2.2,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Dr. Abdelhamid Hassan",
+      "specialty": "Pulmonology",
+      "room_name": "Room 221 - Second Floor",
+      "coordinates": [
+        2.2,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 19,
+      "name": "Dr. Karim Abdelsalam",
+      "specialty": "Obstetrics & Gynecology",
+      "room_name": "Room 230 - Second Floor",
+      "coordinates": [
+        2.3,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Dr. Ahmed El-Erian",
+      "specialty": "Obstetrics & Gynecology",
+      "room_name": "Room 231 - Second Floor",
+      "coordinates": [
+        2.3,
+        2.0,
+        1.57
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Dr. Youssef Nabil",
+      "specialty": "Orthopedics",
+      "room_name": "Room 210 - Second Floor",
+      "coordinates": [
+        2.1,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Dr. Ehab Orfy",
+      "specialty": "Orthopedics",
+      "room_name": "Room 211 - Second Floor",
+      "coordinates": [
+        2.1,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Dr. Mohamed Ahmed",
+      "specialty": "Nephrology",
+      "room_name": "Room 320 - Third Floor",
+      "coordinates": [
+        3.2,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 24,
+      "name": "Dr. Ziad Abdelaziz",
+      "specialty": "Clinical Oncology",
+      "room_name": "Room 410 - Fourth Floor",
+      "coordinates": [
+        4.1,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 25,
+      "name": "Dr. Hany William Zakaria",
+      "specialty": "Clinical Oncology",
+      "room_name": "Room 411 - Fourth Floor",
+      "coordinates": [
+        4.1,
+        2.0,
+        1.57
+      ]
+    },
+    {
+      "id": 26,
+      "name": "Dr. Mohamed Raafat",
+      "specialty": "Neurosurgery",
+      "room_name": "Room 420 - Fourth Floor",
+      "coordinates": [
+        4.2,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 27,
+      "name": "Dr. Bassem Abdelrahman",
+      "specialty": "Vascular Surgery",
+      "room_name": "Room 240 - Second Floor",
+      "coordinates": [
+        2.4,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 28,
+      "name": "Dr. Tamer Ahmad ElSayed",
+      "specialty": "Physiotherapy",
+      "room_name": "Room 070 - Ground Floor",
+      "coordinates": [
+        0.7,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": 29,
+      "name": "Dr. Ahmed Fouad",
+      "specialty": "Plastic Surgery",
+      "room_name": "Room 430 - Fourth Floor",
+      "coordinates": [
+        4.3,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 30,
+      "name": "Dr. Yasmine Adel",
+      "specialty": "Hepatology",
+      "room_name": "Room 330 - Third Floor",
+      "coordinates": [
+        3.3,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 31,
+      "name": "Dr. Azza Ismail",
+      "specialty": "Oral Surgery",
+      "room_name": "Room 067 - Ground Floor",
+      "coordinates": [
+        0.67,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": 32,
+      "name": "Dr. Nadine ElBanby",
+      "specialty": "Audiology",
+      "room_name": "Room 150 - First Floor",
+      "coordinates": [
+        1.5,
+        5.0,
+        1.0
+      ]
+    },
+    {
+      "id": 33,
+      "name": "Dr. Sameh Mansour",
+      "specialty": "Gastroenterology",
+      "room_name": "Room 250 - Second Floor",
+      "coordinates": [
+        2.5,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 34,
+      "name": "Dr. Sara Hassan",
+      "specialty": "Endocrinology",
+      "room_name": "Room 340 - Third Floor",
+      "coordinates": [
+        3.4,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 35,
+      "name": "Dr. Walaa Sabry",
+      "specialty": "Psychiatry",
+      "room_name": "Room 440 - Fourth Floor",
+      "coordinates": [
+        4.4,
+        1.0,
+        1.57
+      ]
+    },
+    {
+      "id": 36,
+      "name": "Dr. Kerollos Wadie",
+      "specialty": "Emergency Medicine",
+      "room_name": "Emergency - Ground Floor",
+      "coordinates": [
+        0.1,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "id": 37,
+      "name": "Dr. Tarek Samy",
+      "specialty": "Urology",
+      "room_name": "Room 260 - Second Floor",
+      "coordinates": [
+        2.6,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Dr. Khaled Salama",
+      "specialty": "General Surgery",
+      "room_name": "Room 270 - Second Floor",
+      "coordinates": [
+        2.7,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 39,
+      "name": "Dr. Noura Tawfik",
+      "specialty": "Clinical Nutrition",
+      "room_name": "Room 160 - First Floor",
+      "coordinates": [
+        1.6,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 40,
+      "name": "Reception Desk",
+      "specialty": "General Information",
+      "room_name": "Reception - Ground Floor",
+      "coordinates": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

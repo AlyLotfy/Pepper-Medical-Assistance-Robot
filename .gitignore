@@ -1,10 +1,105 @@
-# Exclude environment and SDK folders
-pepper_env/
-pynaoqi-*/
-Nao_Pepper/
+# =============================================
+# Pepper Medical Assistance Robot — .gitignore
+# =============================================
 
-# Ignore system and temporary files
+# --- Python ---
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+*.pyz
+*.pyzw
+*.whl
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# --- Virtual Environments ---
+pepper_env/
+venv/
+env/
+.venv/
+.env/
+
+# --- NAOqi / Pepper SDK (large binary SDK — install separately) ---
+pynaoqi*/
+Nao_Pepper/
+*/Nao_Pepper/
+
+# --- Secrets / Config ---
+.env
+*.env
+
+# --- Databases (contain patient data — never commit) ---
+*.db
+*.sqlite
+*.sqlite3
+hospital.db
+app.db
+
+# --- Temporary Audio / Camera Files ---
+*.wav
+*.ogg
+*.mp3
+*.mp4
+temp.wav
+temp_voice.wav
+record.wav
+voice.wav
+camera.jpg
+camera1.ogg
+pepper_frames/
+*/pepper_frames/
+
+# --- Auto-generated AI/ML Indexes (rebuild with rag_engine.py) ---
+rag_index.faiss
+rag_meta.json
+lang.flag
+
+# --- Face Recognition Runtime Data ---
+ai_modules/face_data/face_model.xml
+ai_modules/face_data/labels.json
+face_db/
+
+# --- IDE / OS ---
+.idea/
 .vscode/
+*.suo
+*.user
+Thumbs.db
 .DS_Store
+desktop.ini
+
+# --- Compiled Python 2 bytecode ---
+*.pyc
+
+# --- Archive folder (old prototype code) ---
+Archive/
+
+# --- Zip artifacts ---
+*.zip
+pepper_ui.zip
+
+# --- Large ML Model Weights (too large for git) ---
+*.pth
+*.pt
+*.onnx
+*.bin
+*.h5
+*.pkl
+*.safetensors
+
+# --- Claude memory ---
+.claude/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Web scraping temp ---
+Web Scraping/

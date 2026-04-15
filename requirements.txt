@@ -1,0 +1,43 @@
+# ================================================
+# Pepper Medical Assistance Robot — Python 3 (Backend)
+# Install: pip install -r requirements.txt
+# ================================================
+
+# --- Web Framework ---
+flask>=3.0.0
+flask-sqlalchemy>=3.1.0
+flask-cors>=4.0.0
+
+# --- HTTP / API ---
+requests>=2.31.0
+
+# --- Speech-to-Text (faster-whisper with CTranslate2) ---
+faster-whisper>=1.0.0
+
+# --- AI / ML ---
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+numpy>=1.26.0
+
+# --- Computer Vision (Face Auth & Emotion Detection) ---
+opencv-python>=4.9.0
+
+# --- WebSocket (WS Bridge server) ---
+websockets>=12.0
+
+# --- Database utilities ---
+SQLAlchemy>=2.0.0
+
+# --- Data loading ---
+openpyxl>=3.1.0
+
+# --- Optional: Offline LLM (Ollama client) ---
+# ollama>=0.3.0   # only needed if using --offline mode without Ollama REST API
+
+# ================================================
+# Python 2.7 NAOqi dependencies (robot-side scripts)
+# These run with the NAOqi SDK — NOT pip-installed:
+#   naoqi (from NAOqi Python 2.7 SDK)
+#   requests (for MainVoice.py HTTP calls)
+#   websocket-client (for nav_bridge.py / ws_bridge)
+# ================================================

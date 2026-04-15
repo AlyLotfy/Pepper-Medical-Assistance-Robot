@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>About Pepper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <!-- qimessaging.js is served locally by the Pepper tablet -->
+  <script src="i18n.js"></script>
+  <script src="qimessaging.js"></script>
+  <style>
+    *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+    html,body{height:100%; margin:0;}
+    body{
+      font-family:sans-serif;
+      background:-webkit-linear-gradient(315deg,#f7f4f0,#ffffff);
+      background:linear-gradient(135deg,#f7f4f0,#ffffff);
+      color:#5a4a3b;
+      display:-webkit-flex; display:flex;
+      -webkit-align-items:center; align-items:center;
+      -webkit-justify-content:center; justify-content:center;
+      text-align:center; overflow:hidden;
+    }
+    .page-center{
+      display:-webkit-flex; display:flex;
+      -webkit-align-items:center; align-items:center;
+      -webkit-justify-content:center; justify-content:center;
+      height:100%; width:100%; position:relative;
+    }
+    .card-wrapper{
+      width:90%; max-width:600px;
+      max-height:90vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+      border-radius:24px; box-shadow:0 10px 24px rgba(5,31,60,.10); background:#ffffff;
+    }
+    .card{ padding:32px; text-align:left; }
+    h1{ font-size:28px; font-weight:600; margin:0 0 10px 0; color:#5a4a3b; text-align:center; }
+    h2{ font-size:18px; color:#b89a6c; margin:20px 0 10px 0; border-bottom:2px solid #f0f0f0; padding-bottom:5px; }
+    p{ font-size:15px; line-height:1.6; color:#8a7b6b; margin-bottom:15px; }
+
+    .img-grid{
+      display:-webkit-flex; display:flex;
+      -webkit-justify-content:center; justify-content:center;
+      margin-bottom:20px;
+    }
+    .img-grid .img-frame{ margin:0 7px; }
+    .img-frame{ -webkit-flex:1; flex:1; height:150px; border-radius:16px; overflow:hidden; background:#eee; }
+    .img-frame img{ width:100%; height:100%; object-fit:cover; }
+    .hero-img{ width:100%; height:200px; border-radius:16px; overflow:hidden; margin-bottom:24px; background:#eee; }
+    .hero-img img{ width:100%; height:100%; object-fit:cover; object-position:top; }
+
+    ul.specs{ list-style:none; padding:0; margin:0; }
+    ul.specs li{
+      display:-webkit-flex; display:flex;
+      -webkit-justify-content:space-between; justify-content:space-between;
+      padding:8px 0; border-bottom:1px solid #f7f4f0; font-size:14px;
+    }
+    ul.specs li span:first-child{ font-weight:600; color:#5a4a3b; }
+    ul.specs li span:last-child{ color:#8a7b6b; }
+
+    .back-btn{
+      position:absolute; top:20px; left:20px;
+      width:44px; height:44px; background-color:#b89a6c; color:#fff;
+      border-radius:50%; border:none; font-size:24px; cursor:pointer;
+      box-shadow:0 4px 12px rgba(0,0,0,0.15);
+      display:-webkit-flex; display:flex;
+      -webkit-align-items:center; align-items:center;
+      -webkit-justify-content:center; justify-content:center;
+      z-index:1000;
+    }
+    .back-btn:hover  { background-color:#9e7f54; }
+    .back-btn:active { -webkit-transform:scale(0.95); transform:scale(0.95); }
+    [dir="rtl"] .back-btn { left:auto; right:20px; }
+  </style>
+</head>
+<body class="page-center">
+
+  <button class="back-btn" onclick="history.back()" title="Go Back">&#8592;</button>
+
+  <div class="card-wrapper">
+    <div class="card">
+      <div class="hero-img">
+        <img src="Pepper.jpg" alt="Pepper Robot Full View">
+      </div>
+
+      <h1 data-i18n="i_am_pepper">I am Pepper</h1>
+      <p style="text-align:center;" data-i18n="healthcare_asst">Your Personal Healthcare Assistant</p>
+
+      <h2 data-i18n="my_mission">My Mission</h2>
+      <p data-i18n="mission_text">
+        I am here to make your visit to Andalusia Hospital smoother and friendlier.
+        I use advanced AI to help you find doctors, book appointments, and answer your questions instantly.
+      </p>
+
+      <div class="img-grid">
+        <div class="img-frame">
+          <img src="PARTNER LOGO Andalusia.png" alt="Andalusia Hospital">
+        </div>
+        <div class="img-frame" style="background:#f7f4f0; display:-webkit-flex; display:flex; -webkit-align-items:center; align-items:center; -webkit-justify-content:center; justify-content:center;">
+          <p style="margin:0; font-size:13px; color:#b89a6c; text-align:center;">Graduation Project<br>AAST 2025</p>
+        </div>
+      </div>
+
+      <h2 data-i18n="what_i_can_do">What I Can Do</h2>
+      <ul class="specs">
+        <li><span>&#128198; Booking</span>     <span>Schedule appointments</span></li>
+        <li><span>&#128205; Navigation</span>  <span>Guide you to rooms</span></li>
+        <li><span>&#128203; Information</span> <span>Doctor schedules &amp; Bios</span></li>
+        <li><span>&#127908; Voice</span>        <span>Speak &amp; listen via microphone</span></li>
+        <li><span>&#128241; Touch</span>        <span>Tablet touch interface</span></li>
+        <li><span>&#128680; Emergency</span>    <span>Alert staff instantly</span></li>
+      </ul>
+
+      <h2 data-i18n="technical_specs">Technical Specs</h2>
+      <ul class="specs">
+        <li><span>Model</span>   <span>Pepper 1.8a (SoftBank Robotics)</span></li>
+        <li><span>Height</span>  <span>1.20 m (4 ft)</span></li>
+        <li><span>Weight</span>  <span>28 kg</span></li>
+        <li><span>Sensors</span> <span>Lasers, Sonar, Tactile, 3D Camera</span></li>
+        <li><span>Tablet</span>  <span>High-res Touch Display</span></li>
+        <li><span>AI</span>      <span>Gemini + Whisper STT + RAG</span></li>
+      </ul>
+
+      <p style="text-align:center; margin-top:30px; font-size:13px;" data-i18n="about_footer">
+        Designed for Andalusia Hospital — AAST Graduation Project 2025.
+      </p>
+    </div>
+  </div>
+
+  <script>
+  // Pepper QiSession: make Pepper introduce itself when the About page opens
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.I18N) I18N.applyI18n();
+
+    if (typeof QiSession !== 'undefined') {
+      try {
+        var session = new QiSession();
+        session.socket().on('connect', function () {
+          session.service('ALTextToSpeech').then(function (tts) {
+            var lang = (window.I18N) ? I18N.getLang() : 'en';
+            if (lang === 'ar') {
+              tts.setLanguage('Arabic');
+              tts.say(I18N.t('about_intro'));
+            } else {
+              tts.setLanguage('English');
+              tts.say('Let me introduce myself. I am Pepper, your medical assistant at Andalusia Hospital.');
+            }
+          }).catch(function (e) { console.warn('TTS error:', e); });
+        }).on('disconnect', function () {});
+      } catch (e) { console.warn('QiSession failed:', e); }
+    }
+  });
+  </script>
+</body>
+</html>

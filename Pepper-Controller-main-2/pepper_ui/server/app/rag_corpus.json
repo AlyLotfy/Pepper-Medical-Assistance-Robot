@@ -1,0 +1,302 @@
+[
+  {
+    "id": "hosp_overview",
+    "category": "hospital",
+    "text_en": "Andalusia Hospital is a multi-specialty healthcare facility in Alexandria, Egypt. We provide comprehensive medical services across 4 floors with over 40 departments. Our flagship branch is in Smouha, Alexandria. We also have branches in Roushdy, Antoniadis, and El-Shalalat in Alexandria.",
+    "text_ar": "مستشفى أندلسية هي منشأة رعاية صحية متعددة التخصصات في الإسكندرية، مصر. نقدم خدمات طبية شاملة عبر 4 طوابق مع أكثر من 40 قسمًا."
+  },
+  {
+    "id": "hosp_hours",
+    "category": "hospital",
+    "text_en": "Andalusia Hospital operates 24 hours a day, 7 days a week for emergency services. Outpatient clinics are open Saturday through Thursday from 9:00 AM to 9:00 PM. Friday clinics operate from 1:00 PM to 9:00 PM. The pharmacy is open 24/7.",
+    "text_ar": "مستشفى أندلسية تعمل على مدار الساعة طوال أيام الأسبوع لخدمات الطوارئ. العيادات الخارجية مفتوحة من السبت إلى الخميس من 9 صباحًا حتى 9 مساءً."
+  },
+  {
+    "id": "hosp_contact",
+    "category": "hospital",
+    "text_en": "For general inquiries, visit the Reception Desk on the Ground Floor. For appointments, use the booking system on this tablet or ask Pepper for assistance. In case of emergency, proceed directly to the Emergency department on the Ground Floor or call the emergency line.",
+    "text_ar": "للاستفسارات العامة، قم بزيارة مكتب الاستقبال في الطابق الأرضي. للمواعيد، استخدم نظام الحجز أو اطلب المساعدة من بيبر."
+  },
+  {
+    "id": "hosp_floors",
+    "category": "hospital",
+    "text_en": "Hospital floor layout: Ground Floor has Reception, Emergency, Radiology, Dentistry, Oral Surgery, and Physiotherapy. First Floor has Cardiology, Internal Medicine, Dermatology, Ophthalmology, Audiology, and Clinical Nutrition. Second Floor has Pediatrics, Pulmonology, Obstetrics & Gynecology, Orthopedics, Vascular Surgery, Gastroenterology, and Urology. Third Floor has Neurology, ENT, Nephrology, Hepatology, and Endocrinology. Fourth Floor has Clinical Oncology, Neurosurgery, Plastic Surgery, and Psychiatry.",
+    "text_ar": "تخطيط الطوابق: الأرضي يضم الاستقبال والطوارئ والأشعة. الأول يضم القلب والباطنة والجلدية. الثاني يضم الأطفال والرئة والعظام. الثالث يضم المخ والأعصاب والأنف والأذن. الرابع يضم الأورام وجراحة المخ."
+  },
+  {
+    "id": "hosp_parking",
+    "category": "hospital",
+    "text_en": "Free parking is available for patients and visitors in the underground parking garage. Access is from the main hospital entrance. Disabled parking spaces are located near the main entrance. Valet parking service is available upon request.",
+    "text_ar": "يتوفر موقف سيارات مجاني للمرضى والزوار في الجراج تحت الأرض."
+  },
+  {
+    "id": "hosp_insurance",
+    "category": "hospital",
+    "text_en": "Andalusia Hospital accepts all major insurance providers in Egypt including: MetLife, Alico, AXA, Bupa, MedRight, and National insurance cards. Please bring your insurance card and valid ID to the registration desk. Self-pay patients can pay by cash, credit card, or bank transfer.",
+    "text_ar": "تقبل مستشفى أندلسية جميع شركات التأمين الكبرى في مصر. يرجى إحضار بطاقة التأمين والهوية."
+  },
+  {
+    "id": "hosp_visiting",
+    "category": "hospital",
+    "text_en": "Visiting hours for inpatient wards are from 11:00 AM to 1:00 PM and from 5:00 PM to 8:00 PM daily. ICU visits are limited to 15 minutes per session, two visitors at a time. Children under 12 are not permitted in ICU or isolation wards.",
+    "text_ar": "ساعات الزيارة للمرضى المنومين من 11 صباحًا إلى 1 ظهرًا ومن 5 مساءً إلى 8 مساءً يوميًا."
+  },
+  {
+    "id": "dept_cardiology",
+    "category": "department",
+    "text_en": "The Cardiology department is on the First Floor (Rooms 101-103). Specialists: Dr. Ahmed Salem (Consultant Cardiologist), Dr. Mona Khaled (Consultant Cardiologist), and Dr. Mohamed Fathy (Consultant Cardiologist). Services include ECG, echocardiography, cardiac catheterization, stress tests, Holter monitoring, and heart failure management. For chest pain or heart emergencies, go directly to the Emergency department.",
+    "text_ar": "قسم القلب في الطابق الأول (غرف 101-103). الأطباء: د. أحمد سالم، د. منى خالد، د. محمد فتحي. الخدمات تشمل رسم القلب والقسطرة القلبية."
+  },
+  {
+    "id": "dept_neurology",
+    "category": "department",
+    "text_en": "The Neurology department is on the Third Floor (Rooms 305, 307). Specialists: Dr. Layla Ibrahim (Consultant Neurologist) and Dr. Mohamed Hamdy (Consultant Neurologist). Services include EEG, nerve conduction studies, treatment of epilepsy, stroke, headaches, Parkinson's disease, multiple sclerosis, and neuropathy. For stroke symptoms (face drooping, arm weakness, speech difficulty), call emergency immediately.",
+    "text_ar": "قسم الأعصاب في الطابق الثالث (غرف 305، 307). الأطباء: د. ليلى إبراهيم، د. محمد حمدي. الخدمات تشمل رسم المخ وعلاج الصرع والسكتة الدماغية."
+  },
+  {
+    "id": "dept_internal_medicine",
+    "category": "department",
+    "text_en": "Internal Medicine is on the First Floor (Room 120). Specialist: Dr. Omar Farouk (Consultant Internal Medicine). Services include general health check-ups, diabetes management, hypertension control, thyroid disorders, anemia evaluation, and chronic disease management. This department handles initial evaluation for patients who are unsure which specialist they need.",
+    "text_ar": "قسم الباطنة في الطابق الأول (غرفة 120). الطبيب: د. عمر فاروق. الخدمات تشمل الفحص الشامل وعلاج السكري وضغط الدم."
+  },
+  {
+    "id": "dept_pediatrics",
+    "category": "department",
+    "text_en": "The Pediatrics department is on the Second Floor (Rooms 215-216). Specialists: Dr. Hana Samir (Consultant Pediatrician) and Dr. Amany Yahya (Consultant Pediatrics, Endocrinology, Diabetes). Services include well-child visits, vaccination programs, growth assessment, childhood diabetes, allergies, and adolescent medicine. Neonatal intensive care is available for premature and critically ill newborns.",
+    "text_ar": "قسم الأطفال في الطابق الثاني (غرف 215-216). الأطباء: د. هنا سمير، د. أماني يحيى. الخدمات تشمل التطعيمات ومتابعة النمو وسكر الأطفال."
+  },
+  {
+    "id": "dept_ent",
+    "category": "department",
+    "text_en": "The ENT (Ear, Nose and Throat) department is on the Third Floor (Rooms 310-311). Specialists: Dr. Karim Adel and Dr. Rania Ghazy. Services include hearing tests, sinus treatment, tonsillectomy, adenoidectomy, voice disorders, vertigo treatment, and snoring/sleep apnea evaluation. The Audiology clinic (Dr. Nadine ElBanby, Room 150, First Floor) handles hearing aids and audiometric testing.",
+    "text_ar": "قسم الأنف والأذن والحنجرة في الطابق الثالث (غرف 310-311). الأطباء: د. كريم عادل، د. رانيا غازي."
+  },
+  {
+    "id": "dept_radiology",
+    "category": "department",
+    "text_en": "The Radiology department is on the Ground Floor (Room 050). Specialist: Dr. Nadia Sami (Consultant Radiologist). Services include digital X-ray, CT scan, MRI, ultrasound, mammography, and DEXA bone density scan. Most imaging requires a doctor's referral. Please arrive 15 minutes before your scheduled imaging appointment. Fasting may be required for certain abdominal scans.",
+    "text_ar": "قسم الأشعة في الطابق الأرضي (غرفة 050). الطبيبة: د. نادية سامي. الخدمات تشمل الأشعة السينية والرنين المغناطيسي والموجات فوق الصوتية."
+  },
+  {
+    "id": "dept_dermatology",
+    "category": "department",
+    "text_en": "The Dermatology department is on the First Floor (Rooms 130-131). Specialists: Dr. Islam Mohamed (Consultant Dermatology, Venereology, Laser & Aesthetic) and Dr. Gamal Murad (Consultant Dermatology). Services include acne treatment, eczema, psoriasis, skin cancer screening, mole evaluation, laser hair removal, chemical peels, and Botox/filler injections.",
+    "text_ar": "قسم الجلدية في الطابق الأول (غرف 130-131). الأطباء: د. إسلام محمد، د. جمال مراد. الخدمات تشمل علاج حب الشباب والأكزيما والليزر."
+  },
+  {
+    "id": "dept_ophthalmology",
+    "category": "department",
+    "text_en": "The Ophthalmology department is on the First Floor (Room 140). Specialist: Dr. Mohamed Adly. Services include eye exams, glasses and contact lens prescriptions, cataract surgery, LASIK, glaucoma treatment, retinal screening for diabetic patients, and pediatric eye care.",
+    "text_ar": "قسم العيون في الطابق الأول (غرفة 140). الطبيب: د. محمد عدلي. الخدمات تشمل فحص النظر وعمليات المياه البيضاء والليزك."
+  },
+  {
+    "id": "dept_dentistry",
+    "category": "department",
+    "text_en": "The Dentistry department is on the Ground Floor (Rooms 060-061). Specialists: Dr. Ehab Ali (Specialist Endodontist, Prosthodontist & Fillings) and Dr. Darine Mamdouh (Consultant Dentistry). Services include dental cleaning, fillings, root canal, crowns, bridges, dental implants, teeth whitening, orthodontics (braces), and pediatric dentistry. The Oral Surgery clinic (Dr. Azza Ismail, Room 067) handles wisdom tooth extraction and jaw surgery.",
+    "text_ar": "قسم الأسنان في الطابق الأرضي (غرف 060-061). الأطباء: د. إيهاب علي، د. دارين ممدوح. الخدمات تشمل التنظيف والحشو وعلاج الجذور والتركيبات."
+  },
+  {
+    "id": "dept_pulmonology",
+    "category": "department",
+    "text_en": "The Pulmonology department is on the Second Floor (Rooms 220-221). Specialists: Dr. Omar Abdelkhalek and Dr. Abdelhamid Hassan. Services include asthma management, COPD treatment, pulmonary function tests, bronchoscopy, sleep studies, and smoking cessation programs. For difficulty breathing or severe asthma attacks, go to Emergency immediately.",
+    "text_ar": "قسم الصدر والرئة في الطابق الثاني (غرف 220-221). الأطباء: د. عمر عبدالخالق، د. عبدالحميد حسن. الخدمات تشمل علاج الربو ووظائف الرئة."
+  },
+  {
+    "id": "dept_obgyn",
+    "category": "department",
+    "text_en": "The Obstetrics & Gynecology department is on the Second Floor (Rooms 230-231). Specialists: Dr. Karim Abdelsalam and Dr. Ahmed El-Erian. Services include prenatal care, high-risk pregnancy monitoring, normal and cesarean delivery, gynecological exams, pap smears, fertility consultations, and menopause management.",
+    "text_ar": "قسم النساء والتوليد في الطابق الثاني (غرف 230-231). الأطباء: د. كريم عبدالسلام، د. أحمد الإيرياني. الخدمات تشمل متابعة الحمل والولادة."
+  },
+  {
+    "id": "dept_orthopedics",
+    "category": "department",
+    "text_en": "The Orthopedics department is on the Second Floor (Rooms 210-211). Specialists: Dr. Youssef Nabil and Dr. Ehab Orfy (Consultant Trauma & Orthopedics). Services include fracture treatment, joint replacement (hip, knee), sports injuries, arthroscopy, spinal disc problems, carpal tunnel, and physical therapy referrals. For broken bones or severe injuries, go to Emergency first.",
+    "text_ar": "قسم العظام في الطابق الثاني (غرف 210-211). الأطباء: د. يوسف نبيل، د. إيهاب عرفي. الخدمات تشمل الكسور وتغيير المفاصل وإصابات الملاعب."
+  },
+  {
+    "id": "dept_emergency",
+    "category": "department",
+    "text_en": "The Emergency department is on the Ground Floor (Emergency entrance). Specialist: Dr. Kerollos Wadie (Emergency Medicine). Available 24/7 for all medical emergencies including chest pain, stroke, severe bleeding, breathing difficulty, accidents, and poisoning. Triage is performed on arrival — life-threatening cases are seen immediately. The emergency department has direct access to the ICU, operating rooms, and radiology.",
+    "text_ar": "قسم الطوارئ في الطابق الأرضي. الطبيب: د. كيرلس وديع. متاح 24/7 لجميع الحالات الطارئة. يتم فرز المرضى حسب خطورة الحالة."
+  },
+  {
+    "id": "dept_physiotherapy",
+    "category": "department",
+    "text_en": "The Physiotherapy department is on the Ground Floor (Room 070). Specialist: Dr. Tamer Ahmad ElSayed. Services include post-surgical rehabilitation, back and neck pain therapy, sports injury recovery, stroke rehabilitation, pediatric physiotherapy, and electrotherapy. Sessions are typically 30-45 minutes. A physician referral is required.",
+    "text_ar": "قسم العلاج الطبيعي في الطابق الأرضي (غرفة 070). الطبيب: د. تامر أحمد السيد. الخدمات تشمل التأهيل بعد العمليات وعلاج آلام الظهر."
+  },
+  {
+    "id": "dept_nephrology",
+    "category": "department",
+    "text_en": "The Nephrology department is on the Third Floor (Room 320). Specialist: Dr. Mohamed Ahmed. Services include kidney function evaluation, dialysis management, kidney stone treatment, electrolyte disorders, and chronic kidney disease monitoring. The hospital has a fully equipped dialysis unit.",
+    "text_ar": "قسم الكلى في الطابق الثالث (غرفة 320). الطبيب: د. محمد أحمد. الخدمات تشمل غسيل الكلى وعلاج حصوات الكلى."
+  },
+  {
+    "id": "dept_oncology",
+    "category": "department",
+    "text_en": "Clinical Oncology is on the Fourth Floor (Rooms 410-411). Specialists: Dr. Ziad Abdelaziz and Dr. Hany William Zakaria. Services include chemotherapy, radiation therapy, immunotherapy, tumor board consultations, cancer screening, and palliative care coordination. Dedicated oncology pharmacy support is available on the same floor.",
+    "text_ar": "قسم الأورام في الطابق الرابع (غرف 410-411). الأطباء: د. زياد عبدالعزيز، د. هاني وليم زكريا. الخدمات تشمل العلاج الكيميائي والإشعاعي."
+  },
+  {
+    "id": "dept_neurosurgery",
+    "category": "department",
+    "text_en": "Neurosurgery is on the Fourth Floor (Room 420). Specialist: Dr. Mohamed Raafat. Services include brain tumor surgery, spinal cord surgery, disc herniation repair, hydrocephalus treatment, and trigeminal neuralgia. All neurosurgical procedures are performed in state-of-the-art operating rooms with neuro-navigation equipment.",
+    "text_ar": "قسم جراحة المخ والأعصاب في الطابق الرابع (غرفة 420). الطبيب: د. محمد رأفت."
+  },
+  {
+    "id": "dept_vascular",
+    "category": "department",
+    "text_en": "Vascular Surgery is on the Second Floor (Room 240). Specialist: Dr. Bassem Abdelrahman. Services include varicose vein treatment, arterial bypass surgery, diabetic foot care, deep vein thrombosis management, and aortic aneurysm repair.",
+    "text_ar": "قسم جراحة الأوعية الدموية في الطابق الثاني (غرفة 240). الطبيب: د. باسم عبدالرحمن."
+  },
+  {
+    "id": "dept_plastic_surgery",
+    "category": "department",
+    "text_en": "Plastic Surgery is on the Fourth Floor (Room 430). Specialist: Dr. Ahmed Fouad (Consultant Plastic Surgery). Services include reconstructive surgery, burn treatment, hand surgery, rhinoplasty, liposuction, abdominoplasty, and scar revision.",
+    "text_ar": "قسم الجراحة التجميلية في الطابق الرابع (غرفة 430). الطبيب: د. أحمد فؤاد."
+  },
+  {
+    "id": "dept_hepatology",
+    "category": "department",
+    "text_en": "Hepatology is on the Third Floor (Room 330). Specialist: Dr. Yasmine Adel. Services include hepatitis B and C treatment, liver cirrhosis management, fatty liver disease, liver biopsy, and liver transplant evaluation.",
+    "text_ar": "قسم الكبد في الطابق الثالث (غرفة 330). الطبيبة: د. ياسمين عادل. الخدمات تشمل علاج فيروس الكبد وتليف الكبد."
+  },
+  {
+    "id": "dept_gastroenterology",
+    "category": "department",
+    "text_en": "Gastroenterology is on the Second Floor (Room 250). Specialist: Dr. Sameh Mansour. Services include upper and lower endoscopy, colonoscopy, GERD treatment, IBS management, Crohn's disease, ulcerative colitis, peptic ulcer, and gallbladder disorders.",
+    "text_ar": "قسم الجهاز الهضمي في الطابق الثاني (غرفة 250). الطبيب: د. سامح منصور. الخدمات تشمل المنظار العلوي والسفلي."
+  },
+  {
+    "id": "dept_endocrinology",
+    "category": "department",
+    "text_en": "Endocrinology is on the Third Floor (Room 340). Specialist: Dr. Sara Hassan. Services include diabetes management, thyroid disorders, adrenal problems, pituitary disorders, osteoporosis, PCOS, and growth hormone deficiency. Comprehensive diabetes education and insulin pump management available.",
+    "text_ar": "قسم الغدد الصماء في الطابق الثالث (غرفة 340). الطبيبة: د. سارة حسن. الخدمات تشمل علاج السكري والغدة الدرقية."
+  },
+  {
+    "id": "dept_psychiatry",
+    "category": "department",
+    "text_en": "Psychiatry is on the Fourth Floor (Room 440). Specialist: Dr. Walaa Sabry. Services include treatment of depression, anxiety, OCD, bipolar disorder, schizophrenia, PTSD, addiction counseling, and cognitive behavioral therapy. All consultations are strictly confidential.",
+    "text_ar": "قسم الطب النفسي في الطابق الرابع (غرفة 440). الطبيبة: د. ولاء صبري. الخدمات تشمل علاج الاكتئاب والقلق."
+  },
+  {
+    "id": "dept_urology",
+    "category": "department",
+    "text_en": "Urology is on the Second Floor (Room 260). Specialist: Dr. Tarek Samy. Services include kidney stones (lithotripsy), prostate treatment, urinary tract infections, incontinence, male infertility, and urological cancer screening.",
+    "text_ar": "قسم المسالك البولية في الطابق الثاني (غرفة 260). الطبيب: د. طارق سامي. الخدمات تشمل تفتيت الحصوات وعلاج البروستاتا."
+  },
+  {
+    "id": "dept_general_surgery",
+    "category": "department",
+    "text_en": "General Surgery is on the Second Floor (Room 270). Specialist: Dr. Khaled Salama. Services include appendectomy, hernia repair, gallbladder removal (laparoscopic), thyroidectomy, breast surgery, and emergency abdominal surgery.",
+    "text_ar": "قسم الجراحة العامة في الطابق الثاني (غرفة 270). الطبيب: د. خالد سلامة."
+  },
+  {
+    "id": "dept_nutrition",
+    "category": "department",
+    "text_en": "Clinical Nutrition is on the First Floor (Room 160). Specialist: Dr. Noura Tawfik. Services include therapeutic diet planning for diabetes, heart disease, kidney disease, weight management programs, sports nutrition, and pre/post-surgical nutritional support.",
+    "text_ar": "قسم التغذية العلاجية في الطابق الأول (غرفة 160). الطبيبة: د. نورا توفيق."
+  },
+  {
+    "id": "triage_overview",
+    "category": "triage",
+    "text_en": "Andalusia Hospital uses the Manchester Triage Scale (MTS) for patient assessment. Level 1 (Red/Immediate): life-threatening emergencies requiring instant intervention. Level 2 (Orange/Very Urgent): potentially life-threatening, seen within 10 minutes. Level 3 (Yellow/Urgent): urgent conditions, seen within 60 minutes. Level 4 (Green/Standard): non-urgent, wait time up to 120 minutes. You can use the Symptom Check feature on this tablet to perform a preliminary triage assessment.",
+    "text_ar": "تستخدم مستشفى أندلسية مقياس مانشستر للفرز. المستوى 1 (أحمر): حالات مهددة للحياة. المستوى 2 (برتقالي): عاجل جدًا. المستوى 3 (أصفر): عاجل. المستوى 4 (أخضر): عادي."
+  },
+  {
+    "id": "triage_red_flags",
+    "category": "triage",
+    "text_en": "Seek IMMEDIATE emergency help for: chest pain spreading to arm or jaw, inability to breathe, face drooping or arm weakness (stroke signs), severe uncontrolled bleeding, loss of consciousness, severe allergic reaction (anaphylaxis), or seizures. Do NOT wait — go directly to the Emergency department on the Ground Floor or tell Pepper 'Emergency'.",
+    "text_ar": "اطلب المساعدة الطارئة فورًا في حالة: ألم في الصدر ينتشر للذراع، صعوبة في التنفس، تدلي الوجه (علامات السكتة)، نزيف شديد، فقدان الوعي."
+  },
+  {
+    "id": "service_appointments",
+    "category": "service",
+    "text_en": "To book an appointment, tap 'Book Appointment' on the home screen. Select a department, choose a doctor, and pick an available date and time. You can also say 'Book an appointment' to Pepper. To view your upcoming appointments, tap 'My Appointments'. Staff can manage all appointments from the Staff Dashboard.",
+    "text_ar": "لحجز موعد، اضغط على 'حجز موعد' في الشاشة الرئيسية. اختر القسم والطبيب والوقت المناسب."
+  },
+  {
+    "id": "service_navigation",
+    "category": "service",
+    "text_en": "Pepper can guide you to any department, doctor's room, or facility in the hospital. Tap 'Guide to Room' on the home screen, or say 'Take me to Cardiology' or 'Where is Dr. Ahmed Salem?'. Pepper will physically lead you to the location. If the robot cannot move, it will provide verbal directions.",
+    "text_ar": "يمكن لبيبر إرشادك إلى أي قسم أو غرفة طبيب. اضغط على 'دليل الغرف' أو قل 'خذني إلى قسم القلب'."
+  },
+  {
+    "id": "service_voice",
+    "category": "service",
+    "text_en": "Pepper understands both Arabic and English. Tap the 'Tap to Speak' button and speak naturally. Pepper will transcribe your speech, understand your request, and respond in the same language. You can ask questions like 'What departments are on the second floor?', 'I have a headache', or 'How do I book an appointment?'.",
+    "text_ar": "بيبر يفهم العربية والإنجليزية. اضغط على زر 'اضغط للتحدث' وتحدث بشكل طبيعي."
+  },
+  {
+    "id": "service_emergency",
+    "category": "service",
+    "text_en": "In an emergency, tap the 'Emergency' tile on the home screen. This will immediately alert the medical staff, display critical instructions, and Pepper will announce the emergency. You can also complete the Symptom Check wizard — if your symptoms indicate Level 1 (life-threatening), the emergency protocol activates automatically.",
+    "text_ar": "في حالة الطوارئ، اضغط على 'طوارئ' في الشاشة الرئيسية. سيتم تنبيه الطاقم الطبي فورًا."
+  },
+  {
+    "id": "prep_fasting",
+    "category": "preparation",
+    "text_en": "Fasting instructions: For blood tests, fast for 8-12 hours (water is allowed). For abdominal ultrasound, fast for 6 hours. For colonoscopy, follow the bowel preparation kit instructions provided 24 hours before. For surgery under general anesthesia, stop eating 8 hours before and stop drinking 2 hours before.",
+    "text_ar": "تعليمات الصيام: لتحليل الدم، صم 8-12 ساعة. للموجات فوق الصوتية للبطن، صم 6 ساعات."
+  },
+  {
+    "id": "prep_documents",
+    "category": "preparation",
+    "text_en": "Please bring the following to your appointment: valid national ID or passport, insurance card (if applicable), any previous medical reports or imaging, current medication list, and your appointment confirmation number. First-time patients will need to complete a registration form at the Reception desk.",
+    "text_ar": "يرجى إحضار: بطاقة الهوية، بطاقة التأمين، التقارير الطبية السابقة، قائمة الأدوية الحالية."
+  },
+  {
+    "id": "tips_general",
+    "category": "health_tips",
+    "text_en": "General health tips: Drink at least 8 glasses of water daily. Aim for 30 minutes of moderate exercise 5 days a week. Eat 5 servings of fruits and vegetables daily. Get 7-9 hours of sleep. Schedule regular check-ups — annual physical exams can catch problems early. Do not smoke. Limit sugar and salt intake.",
+    "text_ar": "نصائح صحية: اشرب 8 أكواب ماء يوميًا. مارس الرياضة 30 دقيقة 5 أيام في الأسبوع. تناول 5 حصص فواكه وخضروات يوميًا."
+  },
+  {
+    "id": "tips_diabetes",
+    "category": "health_tips",
+    "text_en": "Diabetes management tips: Monitor blood sugar regularly. Take medications as prescribed. Follow a balanced diet low in refined carbohydrates. Exercise regularly — it helps control blood sugar. Check feet daily for cuts or sores. Keep regular appointments with your endocrinologist. Carry a glucose source for hypoglycemia episodes.",
+    "text_ar": "نصائح لمرضى السكري: راقب سكر الدم بانتظام. تناول الأدوية في مواعيدها. اتبع نظامًا غذائيًا متوازنًا."
+  },
+  {
+    "id": "tips_heart",
+    "category": "health_tips",
+    "text_en": "Heart health tips: Maintain a healthy weight. Eat a diet low in saturated fats and sodium. Exercise regularly. Monitor blood pressure and cholesterol. Do not smoke. Manage stress through relaxation techniques. Know the warning signs of a heart attack: chest pain/pressure, shortness of breath, pain in arm/jaw, nausea, dizziness.",
+    "text_ar": "نصائح لصحة القلب: حافظ على وزن صحي. تناول طعامًا قليل الدهون والملح. مارس الرياضة بانتظام."
+  },
+  {
+    "id": "tips_children",
+    "category": "health_tips",
+    "text_en": "Child health tips: Follow the national vaccination schedule. Monitor growth milestones. Encourage active play and limit screen time. Ensure a balanced diet with adequate calcium and iron. Schedule regular pediatric check-ups. Teach proper handwashing. Keep medications and chemicals out of reach.",
+    "text_ar": "نصائح لصحة الأطفال: اتبع جدول التطعيمات. راقب معالم النمو. شجع اللعب النشط وقلل وقت الشاشة."
+  },
+  {
+    "id": "covid_protocol",
+    "category": "safety",
+    "text_en": "Hospital infection control measures: Hand sanitizer stations are available throughout the hospital. Masks are recommended in clinical areas. Patients with respiratory symptoms are directed to a separate screening area. Isolation rooms are available for infectious cases. Visitor limits may apply during outbreak periods.",
+    "text_ar": "إجراءات مكافحة العدوى: محطات تعقيم اليدين متوفرة في جميع أنحاء المستشفى. يُنصح بارتداء الكمامة في المناطق السريرية."
+  },
+  {
+    "id": "pepper_about",
+    "category": "robot",
+    "text_en": "I am Pepper, a humanoid robot made by SoftBank Robotics. I serve as a medical assistant at Andalusia Hospital. I can help you with: booking appointments, navigating to departments, answering health questions, performing symptom triage assessment, and providing health tips. I speak Arabic and English. I am here to assist, not to replace your doctor. For medical emergencies, always seek human medical staff immediately.",
+    "text_ar": "أنا بيبر، روبوت ذكي من سوفت بانك روبوتيكس. أعمل كمساعد طبي في مستشفى أندلسية. يمكنني مساعدتك في حجز المواعيد والتوجيه وتقييم الأعراض."
+  },
+  {
+    "id": "pepper_capabilities",
+    "category": "robot",
+    "text_en": "Pepper's capabilities: Voice recognition in Arabic and English using OpenAI Whisper. Intelligent responses powered by Google Gemini AI. Hospital navigation using SLAM mapping. Symptom triage based on Manchester Triage Scale. Real-time staff dashboard for clinical oversight. Touch-screen interface with bilingual support.",
+    "text_ar": "قدرات بيبر: التعرف على الصوت بالعربية والإنجليزية، الذكاء الاصطناعي من جوجل جيميناي، التنقل الذاتي، فرز الأعراض."
+  },
+  {
+    "id": "branches_alex",
+    "category": "branches",
+    "text_en": "Andalusia Hospital branches in Alexandria: Smouha Hospital (main flagship branch), Roushdy Clinics (polyclinic center), Antoniadis Clinics (clinics and diagnostics), El-Shalalat Clinics (outpatient clinics), Borg El Arab Hospital (industrial zone), Abu Qir Clinic (coastal area), Stanley Polyclinic, San Stefano Medical Center (premium care), Glim Hospital, and Loran Medical Center.",
+    "text_ar": "فروع أندلسية في الإسكندرية: مستشفى سموحة (الفرع الرئيسي)، عيادات رشدي، عيادات أنطونيادس، عيادات الشلالات."
+  },
+  {
+    "id": "branches_cairo",
+    "category": "branches",
+    "text_en": "Andalusia Hospital branches in Cairo and Giza: Maadi Hospital, Nasr City Hospital, Heliopolis Polyclinic, New Cairo Medical Center, 6th October (Hay Al Ashgar Clinics, Dar El Fouad Clinics, Surgical Center), Sheikh Zayed Polyclinic, El Rehab Medical Center, and Madinaty Clinic.",
+    "text_ar": "فروع أندلسية في القاهرة والجيزة: مستشفى المعادي، مستشفى مدينة نصر، بوليكلينيك مصر الجديدة، مركز القاهرة الجديدة الطبي."
+  }
+]

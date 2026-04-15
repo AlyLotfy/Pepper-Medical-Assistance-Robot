@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>My Appointments</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f7f4f0;
+      color: #5a4a3b;
+      display: -webkit-flex; display: flex;
+      -webkit-flex-direction: column; flex-direction: column;
+      -webkit-align-items: center; align-items: center;
+      padding: 20px; margin: 0;
+    }
+    .header {
+      width: 100%; max-width: 600px;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      margin-bottom: 25px;
+    }
+    .back-btn {
+      background: #e0e0e0; border: none; border-radius: 50%; color: #5a4a3b;
+      width: 45px; height: 45px; font-size: 22px; cursor: pointer;
+      margin-right: 15px;
+      display: -webkit-flex; display: flex;
+      -webkit-align-items: center; align-items: center;
+      -webkit-justify-content: center; justify-content: center;
+    }
+    h1 { margin: 0; font-size: 24px; font-weight: 600; }
+
+    .card {
+      background: white; padding: 15px 20px; border-radius: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      margin-bottom: 15px; border-left: 6px solid #b89a6c;
+      width: 100%; max-width: 600px;
+    }
+    .card h3 { margin: 0 0 5px 0; font-size: 18px; color: #b89a6c; font-weight: 600; }
+    .card p  { margin: 2px 0; font-size: 14px; color: #666; }
+
+    .msg { text-align: center; color: #888; margin-top: 50px; font-size: 16px; }
+    .btn {
+      background: #b89a6c; color: white; padding: 12px 25px;
+      text-decoration: none; border-radius: 25px; font-weight: 600;
+      display: inline-block; margin-top: 10px;
+    }
+    [dir="rtl"] .back-btn { margin-right: 0; margin-left: 15px; }
+    [dir="rtl"] .card { border-left: none; border-right: 6px solid #b89a6c; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <button class="back-btn" onclick="location.href='index.html'">&#8592;</button>
+    <h1 data-i18n="my_appointments">My Appointments</h1>
+  </div>
+
+  <div id="list" style="width:100%; max-width:600px;">
+    <p class="msg">Loading...</p>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="demo_store.js"></script>
+  <script>
+  var list = document.getElementById('list');
+
+  function renderAppointments() {
+    if (!list) return;
+
+    if (!window.STORE || !STORE.myAppointments) {
+      list.innerHTML = '<p class="msg">Demo store not found. Add demo_store.js</p>';
+      return;
+    }
+
+    var resp = STORE.myAppointments();
+
+    if (!resp || resp.success === false) {
+      list.innerHTML =
+        '<div class="msg"><p>' + I18N.t('sign_in_to_view') + '</p><br>' +
+        '<a href="login.html" class="btn">' + I18N.t('sign_in') + '</a></div>';
+      return;
+    }
+
+    var appts = resp.appointments || [];
+    if (appts.length === 0) {
+      list.innerHTML =
+        '<p class="msg">' + I18N.t('no_appointments_found') + '</p>' +
+        '<div style="text-align:center"><a href="book.html" class="btn">' + I18N.t('book_appointment') + '</a></div>';
+      return;
+    }
+
+    // Clear "NEW" badge since the patient has now viewed their appointments
+    try {
+      var me = (window.STORE && STORE.me) ? STORE.me() : null;
+      if (me && me.id) localStorage.removeItem('hasNewAppointments_' + me.id);
+    } catch (eClear) {}
+
+    var html = '';
+    for (var i = 0; i < appts.length; i++) {
+      var a = appts[i];
+      html += '<div class="card">';
+      html += '<h3>' + (a.doctor || '') + '</h3>';
+      html += '<p><strong>Date:</strong> ' + (a.date || '') + '</p>';
+      html += '<p><strong>Time:</strong> ' + (a.time || '') + '</p>';
+      html += '</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  if (window.I18N) I18N.applyI18n();
+  renderAppointments();
+  </script>
+</body>
+</html>

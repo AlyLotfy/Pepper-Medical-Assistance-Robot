@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Guide to Doctor's Room</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    /* ============================================================
+       Base layout - matches project visual identity (tan/brown)
+    ============================================================ */
+    *, *:before, *:after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+
+    body {
+      font-family: sans-serif;
+      background: -webkit-linear-gradient(315deg, #f7f4f0, #ffffff);
+      background:         linear-gradient(135deg, #f7f4f0, #ffffff);
+      color: #5a4a3b;
+      overflow-y: auto;
+      text-align: center;
+    }
+
+    /* Back button (top-left) */
+    .back-btn {
+      position: fixed; top: 16px; left: 16px;
+      width: 44px; height: 44px;
+      background: #b89a6c; color: #fff;
+      border-radius: 50%; border: none;
+      font-size: 22px; cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .back-btn:active { background: #9a7d52; }
+
+    /* Main card */
+    .card {
+      width: 92%; max-width: 620px;
+      margin: 60px auto 30px auto;
+      background: #fff;
+      border-radius: 24px;
+      box-shadow: 0 10px 28px rgba(5,31,60,0.10);
+      padding: 28px 24px 24px 24px;
+      text-align: left;
+    }
+
+    .title {
+      margin: 0 0 6px 0;
+      font-weight: 700; font-size: 26px;
+      color: #5a4a3b; text-align: center;
+    }
+    .subtitle {
+      margin: 0 0 16px 0;
+      color: #8a7b6b; font-size: 15px;
+      text-align: center;
+    }
+
+    /* ============================================================
+       Status bar - shows connection and navigation state
+    ============================================================ */
+    .status-bar {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 500;
+      text-align: center;
+      margin-bottom: 18px;
+      min-height: 44px;
+      -webkit-transition: background 0.3s;
+              transition: background 0.3s;
+    }
+    .status-connecting  { background: #f0ebe2; color: #8a7b6b; }
+    .status-connected   { background: #e8f4e8; color: #2e7d32; }
+    .status-ok          { background: #e8f4e8; color: #2e7d32; }
+    .status-navigating  { background: #fff3e0; color: #e65100; }
+    .status-error       { background: #fdecea; color: #c62828; }
+    .status-offline     { background: #f5f0e8; color: #8a7b6b; }
+
+    /* ============================================================
+       Navigation buttons
+    ============================================================ */
+    #doctor-list {
+      display: -webkit-flex;
+      display:         flex;
+      -webkit-flex-direction: column;
+              flex-direction: column;
+      -webkit-align-items: center;
+              align-items: center;
+    }
+    #doctor-list .nav-button { margin-bottom: 14px; }
+
+    .nav-button {
+      width: 100%;
+      min-height: 72px;
+      border: 2px solid #d9c8ae;
+      border-radius: 16px;
+      background: #f5f0e8;
+      color: #5a4a3b;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 14px 20px;
+      cursor: pointer;
+      text-align: left;
+      line-height: 1.4;
+      -webkit-transition: background 0.15s, border-color 0.15s;
+              transition: background 0.15s, border-color 0.15s;
+    }
+    .nav-button:active {
+      background: #e8dccf;
+      border-color: #b89a6c;
+      -webkit-transform: translateY(1px);
+              transform: translateY(1px);
+    }
+    .nav-button .btn-name     { display: block; font-size: 19px; font-weight: 700; color: #5a4a3b; }
+    .nav-button .btn-spec     { display: block; font-size: 13px; color: #8a7b6b; margin-top: 2px; }
+    .nav-button .btn-room {
+      display: inline-block; margin-top: 6px;
+      background: #b89a6c; color: #fff;
+      font-size: 12px; font-weight: 600;
+      padding: 3px 10px; border-radius: 20px;
+    }
+
+    /* Disabled state when robot is offline */
+    .nav-button.offline {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* Retry button */
+    .retry-btn {
+      width: 100%; height: 52px;
+      border: none; border-radius: 14px;
+      background: #b89a6c; color: #fff;
+      font-size: 17px; font-weight: 700;
+      cursor: pointer; margin-top: 8px;
+    }
+    .retry-btn:active { background: #9a7d52; }
+
+    /* Loading spinner */
+    .loader {
+      text-align: center; padding: 30px 0;
+      color: #8a7b6b; font-size: 16px;
+    }
+
+    .footer-note {
+      margin-top: 20px; text-align: center;
+      color: #8a7b6b; font-size: 12px;
+    }
+
+    /* RTL support */
+    [dir="rtl"] .back-btn { left: auto; right: 16px; }
+    [dir="rtl"] .nav-button { text-align: right; }
+  </style>
+</head>
+<body>
+
+  <button class="back-btn" onclick="history.back()">&#8592;</button>
+
+  <div class="card">
+    <h1 class="title" data-i18n="find_your_doctor">Find Your Doctor</h1>
+    <p class="subtitle" data-i18n="guide_subtitle">Tap a doctor below and Pepper will guide you to their room.</p>
+
+    <!-- Dynamic status bar -->
+    <div id="status-bar" class="status-bar status-connecting">
+      Connecting to robot&hellip;
+    </div>
+
+    <!-- Navigation buttons injected here -->
+    <div id="doctor-list">
+      <div class="loader" data-i18n="loading_directory">Loading doctor directory&hellip;</div>
+    </div>
+
+    <div class="footer-note" data-i18n="guide_footer">Andalusia Hospital &mdash; Pepper Navigation System</div>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script>
+  // ============================================================
+  // STRICT ES5 COMPLIANCE - Required for Pepper's tablet WebKit
+  // No: let, const, =>, fetch(), Promise, template literals
+  // ============================================================
+
+  // Dynamically resolve server and WebSocket addresses so no IP is hardcoded.
+  // window.location.hostname = the IP that serves this page (Flask server).
+  // window.location.host     = hostname:port (e.g. 192.168.1.50:8080).
+  var SERVER_HOST = window.location.hostname;
+  var WS_URL      = "ws://"  + SERVER_HOST + ":8765";
+  var API_URL     = "http://" + window.location.host + "/api/navigation_targets";
+
+  var statusBar = document.getElementById("status-bar");
+  var listDiv   = document.getElementById("doctor-list");
+  var ws        = null;
+  var wsReady   = false;
+
+  // ---------------------------------------------------------------
+  // Status helpers
+  // ---------------------------------------------------------------
+  function setStatus(text, cssClass) {
+    statusBar.innerHTML  = text;
+    statusBar.className  = "status-bar " + cssClass;
+  }
+
+  // ---------------------------------------------------------------
+  // 1. WebSocket connection
+  // ---------------------------------------------------------------
+  function connectWebSocket() {
+    setStatus(I18N.t("connecting_robot"), "status-connecting");
+
+    try {
+      ws = new WebSocket(WS_URL);
+    } catch (e) {
+      // WebSocket constructor itself failed (very old browser)
+      setStatus("WebSocket not supported on this device.", "status-error");
+      loadTargetsOffline();
+      return;
+    }
+
+    ws.onopen = function() {
+      wsReady = true;
+      setStatus(I18N.t("robot_connected"), "status-connected");
+      fetchNavigationTargets();
+    };
+
+    ws.onerror = function() {
+      // Fetch targets anyway so the directory is still visible (read-only)
+      wsReady = false;
+      setStatus(I18N.t("robot_offline"), "status-offline");
+      fetchNavigationTargets();
+    };
+
+    ws.onmessage = function(event) {
+      try {
+        var data = JSON.parse(event.data);
+        if (data.type === "nav_complete") {
+          setStatus(
+            I18N.t("arrived_doctor", escapeHtml(data.room_name)),
+            "status-ok"
+          );
+          // Re-enable buttons for a new navigation
+          var buttons = listDiv.getElementsByClassName("nav-button");
+          for (var i = 0; i < buttons.length; i++) {
+            buttons[i].className = "nav-button";
+          }
+        } else if (data.type === "nav_failed") {
+          setStatus(
+            "Navigation blocked. Please ask staff for assistance.",
+            "status-error"
+          );
+          var buttons = listDiv.getElementsByClassName("nav-button");
+          for (var i = 0; i < buttons.length; i++) {
+            buttons[i].className = "nav-button";
+          }
+        }
+      } catch (e) {
+        // Ignore non-JSON or unrecognised messages
+      }
+    };
+
+    ws.onclose = function() {
+      wsReady = false;
+      setStatus("Connection lost. Please ask staff for assistance.", "status-error");
+      // Disable all buttons when connection drops mid-session
+      markButtonsOffline();
+    };
+  }
+
+  // ---------------------------------------------------------------
+  // 2. Fetch navigation targets from Flask REST API (XMLHttpRequest)
+  // ---------------------------------------------------------------
+  function fetchNavigationTargets() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", API_URL, true);
+
+    xhr.onreadystatechange = function() {
+      // readyState 4 = operation complete
+      if (xhr.readyState !== 4) { return; }
+
+      if (xhr.status === 200) {
+        try {
+          var targets = JSON.parse(xhr.responseText);
+
+          if (!targets || targets.length === 0) {
+            listDiv.innerHTML = "<p style='color:#8a7b6b;text-align:center'>No doctors found in directory.</p>";
+            return;
+          }
+
+          renderButtons(targets);
+
+          if (wsReady) {
+            setStatus("Select a doctor below. Pepper will guide you.", "status-ok");
+          }
+        } catch (e) {
+          listDiv.innerHTML = "<p style='color:#c62828;text-align:center'>Error parsing directory data.</p>";
+        }
+      } else {
+        listDiv.innerHTML  = "<p style='color:#c62828;text-align:center'>Could not load doctor directory (HTTP " + xhr.status + ").</p>";
+        renderRetryButton();
+      }
+    };
+
+    xhr.onerror = function() {
+      listDiv.innerHTML = "<p style='color:#c62828;text-align:center'>Network error loading directory.</p>";
+      renderRetryButton();
+    };
+
+    xhr.send();
+  }
+
+  // ---------------------------------------------------------------
+  // 3. Render navigation buttons - ES5 IIFE closure pattern
+  //    IIFE (Immediately Invoked Function Expression) traps the
+  //    current loop iteration's 'target' variable. Without this,
+  //    'var' hoisting causes all onclick handlers to reference the
+  //    LAST element in the array (a classic ES5 closure trap).
+  // ---------------------------------------------------------------
+  function renderButtons(targets) {
+    listDiv.innerHTML = "";   // clear loader
+
+    for (var i = 0; i < targets.length; i++) {
+      (function(target) {
+        var btn = document.createElement("button");
+        btn.className = "nav-button" + (wsReady ? "" : " offline");
+
+        // Build button content using string concatenation (no template literals)
+        btn.innerHTML =
+          '<span class="btn-name">' + escapeHtml(target.name) + '</span>' +
+          '<span class="btn-spec">' + escapeHtml(target.specialty) + '</span>' +
+          '<span class="btn-room">' + escapeHtml(target.room_name) + '</span>';
+
+        btn.onclick = function() {
+          if (!wsReady) {
+            setStatus("Robot is offline. Navigation is not available.", "status-error");
+            return;
+          }
+          sendNavigate(target);
+        };
+
+        listDiv.appendChild(btn);
+      })(targets[i]);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 4. Send navigation command over WebSocket
+  // ---------------------------------------------------------------
+  function sendNavigate(target) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setStatus("Connection lost. Cannot navigate. Please try again.", "status-error");
+      wsReady = false;
+      return;
+    }
+
+    var payload = {
+      type:        "navigate",
+      target:      target.coordinates,   // [x, y, theta]
+      doctor_name: target.name,
+      room_name:   target.room_name
+    };
+
+    ws.send(JSON.stringify(payload));
+
+    setStatus(
+      "Pepper is guiding you to " + target.room_name + ". Please follow the robot.",
+      "status-navigating"
+    );
+  }
+
+  // ---------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------
+  function markButtonsOffline() {
+    var buttons = listDiv.getElementsByClassName("nav-button");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].className = "nav-button offline";
+    }
+  }
+
+  function loadTargetsOffline() {
+    // Still load targets even if WS failed, so directory is readable
+    fetchNavigationTargets();
+  }
+
+  function renderRetryButton() {
+    var btn = document.createElement("button");
+    btn.className = "retry-btn";
+    btn.innerHTML = "Retry";
+    btn.onclick = function() {
+      listDiv.innerHTML = "<div class='loader'>Loading&hellip;</div>";
+      fetchNavigationTargets();
+    };
+    listDiv.appendChild(btn);
+  }
+
+  // Minimal HTML escape to prevent XSS from database content
+  function escapeHtml(str) {
+    var s = String(str === null || str === undefined ? "" : str);
+    return s
+      .replace(/&/g,  "&amp;")
+      .replace(/</g,  "&lt;")
+      .replace(/>/g,  "&gt;")
+      .replace(/"/g,  "&quot;");
+  }
+
+  // ---------------------------------------------------------------
+  // Boot - connect WebSocket on page load
+  // ---------------------------------------------------------------
+  if (window.I18N) I18N.applyI18n();
+  connectWebSocket();
+  </script>
+
+</body>
+</html>
