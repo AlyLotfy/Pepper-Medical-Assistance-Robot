@@ -1128,6 +1128,36 @@ def _clean_llm_output(text):
     return text.strip()
 
 
+def _try_parse_raw_tool_call(text):
+    """
+    Some models (especially in Arabic mode) output raw JSON tool calls as text
+    instead of using native tool calling. Detect and parse those.
+    Pattern: {"name": "tool_name", "arguments": {...}}
+    """
+    import re
+    # Strip any prefix text before the JSON object
+    match = re.search(r'\{[^{}]*"name"\s*:\s*"(\w+)"[^{}]*"arguments"\s*:\s*(\{[^}]*\})', text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        start = text.find('{', match.start())
+        # Find matching closing brace
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    obj = json.loads(text[start:i+1])
+                    if 'name' in obj and 'arguments' in obj:
+                        return obj
+                    break
+    except Exception:
+        pass
+    return None
+
+
 def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                                voice_mode, tool_results_for_display):
     """Ollama-based agentic loop with native structured tool calls — mirrors Claude's loop."""
@@ -1137,8 +1167,26 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
     for iteration in range(max_iterations):
         result = call_ollama(system_prompt, messages, max_tokens=max_tokens, tools=OLLAMA_TOOLS)
 
-        # If result is a plain string, no tool call — return it
+        # If result is a plain string, check for raw tool call JSON leaking into text
         if isinstance(result, str):
+            raw_tc = _try_parse_raw_tool_call(result)
+            if raw_tc:
+                # Treat it the same as a native tool call
+                t_name  = raw_tc.get("name", "")
+                t_input = raw_tc.get("arguments", {})
+                if isinstance(t_input, str):
+                    try:
+                        t_input = json.loads(t_input)
+                    except Exception:
+                        t_input = {}
+                valid_tools = {t["name"] for t in CHAT_TOOLS}
+                if t_name in valid_tools:
+                    print(f"[TOOL-OFFLINE-RAW] {t_name}({t_input})")
+                    tool_result = execute_tool(t_name, t_input, user_id, user_name, role)
+                    tool_results_for_display.append({"tool": t_name, "result": tool_result})
+                    messages.append({"role": "assistant", "content": ""})
+                    messages.append({"role": "tool", "content": json.dumps(tool_result)})
+                    continue
             return _clean_llm_output(result) or "Done.", tool_results_for_display
 
         # Native tool call response
@@ -1585,7 +1633,7 @@ def api_triage_export_pdf():
 # --- 7. LEGACY ROUTES (Doctors, Schedule, Departments) ---
 @app.route("/api/doctors", methods=["GET"])
 def api_get_doctors():
-    return json.dumps([{"name": d.name, "specialty": d.specialty} for d in Doctor.query.all()])
+    return jsonify([{"id": d.id, "name": d.name, "specialty": d.specialty} for d in Doctor.query.all()])
 
 @app.route("/api/departments", methods=["GET"])
 def api_get_departments():
