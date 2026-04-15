@@ -67,45 +67,65 @@
 
   function renderAppointments() {
     if (!list) return;
+    list.innerHTML = '<p class="msg">Loading...</p>';
 
-    if (!window.STORE || !STORE.myAppointments) {
-      list.innerHTML = '<p class="msg">Demo store not found. Add demo_store.js</p>';
-      return;
-    }
+    // Always fetch from the real Flask DB
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/my_appointments', true);
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      try {
+        var resp = JSON.parse(xhr.responseText);
 
-    var resp = STORE.myAppointments();
+        if (!resp || resp.success === false) {
+          list.innerHTML =
+            '<div class="msg"><p>' + (window.I18N ? I18N.t('sign_in_to_view') : 'Please sign in to view appointments.') + '</p><br>' +
+            '<a href="login.html" class="btn">' + (window.I18N ? I18N.t('sign_in') : 'Sign In') + '</a></div>';
+          return;
+        }
 
-    if (!resp || resp.success === false) {
-      list.innerHTML =
-        '<div class="msg"><p>' + I18N.t('sign_in_to_view') + '</p><br>' +
-        '<a href="login.html" class="btn">' + I18N.t('sign_in') + '</a></div>';
-      return;
-    }
+        var appts = resp.appointments || [];
+        if (appts.length === 0) {
+          list.innerHTML =
+            '<p class="msg">' + (window.I18N ? I18N.t('no_appointments_found') : 'No appointments found.') + '</p>' +
+            '<div style="text-align:center"><a href="book.html" class="btn">' + (window.I18N ? I18N.t('book_appointment') : 'Book Appointment') + '</a></div>';
+          return;
+        }
 
-    var appts = resp.appointments || [];
-    if (appts.length === 0) {
-      list.innerHTML =
-        '<p class="msg">' + I18N.t('no_appointments_found') + '</p>' +
-        '<div style="text-align:center"><a href="book.html" class="btn">' + I18N.t('book_appointment') + '</a></div>';
-      return;
-    }
+        var html = '';
+        for (var i = 0; i < appts.length; i++) {
+          var a = appts[i];
+          html += '<div class="card">';
+          html += '<h3>Dr. ' + (a.doctor || '') + '</h3>';
+          html += '<p><strong>Date:</strong> ' + (a.date || '') + '</p>';
+          html += '<p><strong>Time:</strong> ' + (a.time || '') + '</p>';
+          if (a.id) {
+            html += '<button onclick="cancelAppointment(' + a.id + ', this)" style="margin-top:8px;background:#d9534f;color:white;border:none;border-radius:20px;padding:6px 16px;cursor:pointer;font-size:13px;">Cancel</button>';
+          }
+          html += '</div>';
+        }
+        list.innerHTML = html;
+      } catch(e) {
+        list.innerHTML = '<p class="msg">Could not load appointments.</p>';
+      }
+    };
+    xhr.onerror = function() {
+      list.innerHTML = '<p class="msg">Could not reach server.</p>';
+    };
+    xhr.send();
+  }
 
-    // Clear "NEW" badge since the patient has now viewed their appointments
-    try {
-      var me = (window.STORE && STORE.me) ? STORE.me() : null;
-      if (me && me.id) localStorage.removeItem('hasNewAppointments_' + me.id);
-    } catch (eClear) {}
-
-    var html = '';
-    for (var i = 0; i < appts.length; i++) {
-      var a = appts[i];
-      html += '<div class="card">';
-      html += '<h3>' + (a.doctor || '') + '</h3>';
-      html += '<p><strong>Date:</strong> ' + (a.date || '') + '</p>';
-      html += '<p><strong>Time:</strong> ' + (a.time || '') + '</p>';
-      html += '</div>';
-    }
-    list.innerHTML = html;
+  function cancelAppointment(id, btn) {
+    if (!confirm('Cancel this appointment?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Cancelling...';
+    var xhr = new XMLHttpRequest();
+    xhr.open('DELETE', '/api/appointments/' + id, true);
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      renderAppointments();
+    };
+    xhr.send();
   }
 
   if (window.I18N) I18N.applyI18n();

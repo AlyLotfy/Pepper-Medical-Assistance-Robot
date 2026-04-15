@@ -749,12 +749,28 @@ def api_my_appointments():
     for a in apps:
         doc = Doctor.query.get(a.doctor_id)
         results.append({
-            "doctor": doc.name if doc else "Unknown", 
-            "date": a.appointment_date.strftime("%Y-%m-%d"), 
+            "id":     a.id,
+            "doctor": doc.name if doc else "Unknown",
+            "specialty": doc.specialty if doc else "",
+            "date": a.appointment_date.strftime("%Y-%m-%d"),
             "time": a.time_slot.strftime("%H:%M")
         })
-        
+
     return jsonify({"success": True, "appointments": results})
+
+
+@app.route("/api/appointments/<int:appt_id>", methods=["DELETE"])
+def api_cancel_appointment(appt_id):
+    if 'user_name' not in session:
+        return jsonify({"success": False, "error": "Not logged in"}), 401
+    appt = Appointment.query.get(appt_id)
+    if not appt:
+        return jsonify({"success": False, "error": "Appointment not found"}), 404
+    if appt.patient_name.lower() != session['user_name'].lower():
+        return jsonify({"success": False, "error": "Not your appointment"}), 403
+    db.session.delete(appt)
+    db.session.commit()
+    return jsonify({"success": True})
 
 # --- 1. AI HEALTH TIPS ENDPOINT ---
 @app.route("/api/ai_health_tips", methods=["GET"])
@@ -1217,6 +1233,15 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                 tool_result = execute_tool(t_name, t_input, user_id, user_name, role)
                 tool_results_for_display.append({"tool": t_name, "result": tool_result})
                 messages.append({"role": "tool", "content": json.dumps(tool_result)})
+                # If booking/cancellation failed, inject a directive so the model
+                # cannot hallucinate a success message
+                if t_name in ("book_appointment", "cancel_appointment") and tool_result.get("error"):
+                    messages.append({
+                        "role": "user",
+                        "content": f"[SYSTEM DIRECTIVE] The {t_name} tool returned this error: \"{tool_result['error']}\". "
+                                   f"You MUST tell the patient that the action FAILED and explain exactly why. "
+                                   f"Do NOT say the appointment was booked or cancelled."
+                    })
             continue
 
         # Text response with no tool calls — final answer
@@ -1359,10 +1384,19 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
                 print(f"[TOOL] {t_name}({t_input})")
                 result = execute_tool(t_name, t_input, user_id, user_name, role)
                 tool_results_for_display.append({"tool": t_name, "result": result})
+                content_str = json.dumps(result)
+                # If booking/cancellation failed, prepend a hard directive so
+                # Claude cannot hallucinate a success message
+                if t_name in ("book_appointment", "cancel_appointment") and result.get("error"):
+                    content_str = (
+                        f"ERROR: The action failed — {result['error']}. "
+                        f"You MUST tell the patient the action failed and why. "
+                        f"Do NOT say the appointment was booked or cancelled.\n" + content_str
+                    )
                 tool_result_contents.append({
                     "type": "tool_result",
                     "tool_use_id": tb["id"],
-                    "content": json.dumps(result)
+                    "content": content_str
                 })
             claude_messages.append({"role": "user", "content": tool_result_contents})
             continue
