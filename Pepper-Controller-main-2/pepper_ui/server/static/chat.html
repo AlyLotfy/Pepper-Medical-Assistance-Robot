@@ -142,6 +142,13 @@
   }
   function removeThinking() { var d = document.getElementById('thinking-dot'); if(d) d.parentNode.removeChild(d); }
 
+  /* Escape HTML special characters to prevent XSS */
+  function esc(s) {
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(String(s == null ? '' : s)));
+    return d.innerHTML;
+  }
+
   function renderToolResults(results) {
     if (!results || !results.length) return;
     results.forEach(function(tr) {
@@ -150,13 +157,13 @@
       if (res.error) {
         var ec = document.createElement('div');
         ec.className = 'error-card';
-        ec.innerHTML = '<div class="card-title">⚠ Error</div>' + res.error;
+        ec.innerHTML = '<div class="card-title">&#9888; Error</div>' + esc(res.error);
         chatArea.appendChild(ec);
       } else if (tool === 'get_departments' && res.departments) {
         var row = document.createElement('div'); row.className = 'card-row';
         res.departments.forEach(function(d) {
           var c = document.createElement('div'); c.className = 'info-card';
-          c.innerHTML = '<div class="card-title">🏥 ' + d + '</div>';
+          c.innerHTML = '<div class="card-title">&#127973; ' + esc(d) + '</div>';
           var btn = document.createElement('button'); btn.className = 'action-btn';
           btn.textContent = 'Find doctors';
           (function(dept){ btn.onclick = function(){ input.value = 'Show doctors in ' + dept; sendMessage(); }; })(d);
@@ -167,7 +174,7 @@
         var row = document.createElement('div'); row.className = 'card-row';
         res.doctors.forEach(function(d) {
           var c = document.createElement('div'); c.className = 'info-card';
-          c.innerHTML = '<div class="card-title">👨‍⚕️ ' + d.name + '</div><div class="card-sub">' + d.specialty + '</div>';
+          c.innerHTML = '<div class="card-title">&#128104;&#8205;&#9877; ' + esc(d.name) + '</div><div class="card-sub">' + esc(d.specialty) + '</div>';
           var btn = document.createElement('button'); btn.className = 'action-btn';
           btn.textContent = 'Book';
           (function(name){ btn.onclick = function(){ input.value = 'I want to book with ' + name; sendMessage(); }; })(d.name);
@@ -177,30 +184,30 @@
       } else if (tool === 'get_doctor_schedule' && res.schedule) {
         var row = document.createElement('div'); row.className = 'card-row';
         var c = document.createElement('div'); c.className = 'info-card'; c.style.minWidth='240px';
-        var html = '<div class="card-title">📅 ' + res.doctor + '</div><div class="card-sub">' + res.specialty + '</div><div class="card-body">';
-        res.schedule.forEach(function(s){ html += s.day + ': ' + s.start + ' – ' + s.end + '<br>'; });
+        var html = '<div class="card-title">&#128197; ' + esc(res.doctor) + '</div><div class="card-sub">' + esc(res.specialty) + '</div><div class="card-body">';
+        res.schedule.forEach(function(s){ html += esc(s.day) + ': ' + esc(s.start) + ' \u2013 ' + esc(s.end) + '<br>'; });
         if (!res.schedule.length) html += 'No schedule available.';
         html += '</div>'; c.innerHTML = html; row.appendChild(c); chatArea.appendChild(row);
       } else if (tool === 'book_appointment' && res.success) {
         var cc = document.createElement('div'); cc.className = 'confirm-card';
-        cc.innerHTML = '<div class="card-title">✅ Appointment Confirmed!</div>' +
-          '👨‍⚕️ ' + res.doctor + ' (' + res.specialty + ')<br>' +
-          '📅 ' + res.date + '  🕐 ' + res.time + '<br>' +
-          '<small>Booking ID: #' + res.appointment_id + '</small>';
+        cc.innerHTML = '<div class="card-title">&#9989; Appointment Confirmed!</div>' +
+          '&#128104;&#8205;&#9877; ' + esc(res.doctor) + ' (' + esc(res.specialty) + ')<br>' +
+          '&#128197; ' + esc(res.date) + '  &#128336; ' + esc(res.time) + '<br>' +
+          '<small>Booking ID: #' + esc(res.appointment_id) + '</small>';
         chatArea.appendChild(cc);
       } else if (tool === 'cancel_appointment' && res.success) {
         var cc = document.createElement('div'); cc.className = 'confirm-card';
-        cc.innerHTML = '<div class="card-title">✅ Appointment Cancelled</div>' +
-          res.cancelled.doctor + ' – ' + res.cancelled.date + ' at ' + res.cancelled.time;
+        cc.innerHTML = '<div class="card-title">&#9989; Appointment Cancelled</div>' +
+          esc(res.cancelled.doctor) + ' \u2013 ' + esc(res.cancelled.date) + ' at ' + esc(res.cancelled.time);
         chatArea.appendChild(cc);
       } else if (tool === 'get_my_appointments' && res.appointments) {
         if (!res.appointments.length) return;
         var row = document.createElement('div'); row.className = 'card-row';
         res.appointments.forEach(function(a) {
           var c = document.createElement('div'); c.className = 'info-card';
-          c.innerHTML = '<div class="card-title">📋 Appt #' + a.id + '</div>' +
-            '<div class="card-sub">' + a.specialty + '</div>' +
-            '<div class="card-body">👨‍⚕️ ' + a.doctor + '<br>📅 ' + a.date + '  🕐 ' + a.time + '</div>';
+          c.innerHTML = '<div class="card-title">&#128203; Appt #' + esc(a.id) + '</div>' +
+            '<div class="card-sub">' + esc(a.specialty) + '</div>' +
+            '<div class="card-body">&#128104;&#8205;&#9877; ' + esc(a.doctor) + '<br>&#128197; ' + esc(a.date) + '  &#128336; ' + esc(a.time) + '</div>';
           var btn = document.createElement('button'); btn.className = 'action-btn';
           btn.style.background = '#d9534f'; btn.textContent = 'Cancel';
           (function(id){ btn.onclick = function(){ input.value = 'Cancel appointment ' + id; sendMessage(); }; })(a.id);
@@ -209,12 +216,12 @@
         chatArea.appendChild(row);
       } else if (tool === 'get_patient_profile') {
         var c = document.createElement('div'); c.className = 'info-card'; c.style.minWidth='260px';
-        var html = '<div class="card-title">👤 ' + (res.name||'') + '</div><div class="card-body">';
-        if (res.age) html += 'Age: ' + res.age + (res.gender ? '  |  ' + res.gender : '') + '<br>';
-        if (res.blood_type) html += 'Blood: ' + res.blood_type + '<br>';
-        if (res.medical_history) html += '<b>History:</b> ' + res.medical_history + '<br>';
-        if (res.allergies) html += '<b>Allergies:</b> ' + res.allergies + '<br>';
-        if (res.current_medications) html += '<b>Medications:</b> ' + res.current_medications;
+        var html = '<div class="card-title">&#128100; ' + esc(res.name||'') + '</div><div class="card-body">';
+        if (res.age) html += 'Age: ' + esc(res.age) + (res.gender ? '  |  ' + esc(res.gender) : '') + '<br>';
+        if (res.blood_type) html += 'Blood: ' + esc(res.blood_type) + '<br>';
+        if (res.medical_history) html += '<b>History:</b> ' + esc(res.medical_history) + '<br>';
+        if (res.allergies) html += '<b>Allergies:</b> ' + esc(res.allergies) + '<br>';
+        if (res.current_medications) html += '<b>Medications:</b> ' + esc(res.current_medications);
         html += '</div>'; c.innerHTML = html;
         var row = document.createElement('div'); row.className = 'card-row'; row.appendChild(c);
         chatArea.appendChild(row);

@@ -78,7 +78,7 @@ def serve_qimessaging():
     return send_from_directory(STATIC_DIR, 'qimessaging.js')
 
 # *** SECURITY KEY (Required for Session) ***
-app.secret_key = "pepper_medical_secret_key_99"
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "pepper_medical_secret_key_99")
 
 # ====== Initialize Whisper (faster-whisper with CTranslate2) ======
 print("[INFO] Loading Whisper Model (this may take a moment)...")
@@ -896,10 +896,13 @@ def process_audio():
 # --- 3. LOGIN / AUTH ---
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    data = request.get_json()
+    data = request.get_json() or {}
     role = data.get("role")
     user_id = data.get("id")
     password = data.get("password")
+
+    if not user_id or not password or role not in ('patient', 'staff'):
+        return jsonify({"success": False, "error": "Invalid input"}), 400
 
     user = None
     if role == 'staff': user = Staff.query.filter_by(id=user_id).first()
@@ -1415,17 +1418,10 @@ def api_chat_ai():
     history   = data.get("history", [])
     lang      = data.get("lang", "en")
 
-    # Resolve identity: Flask session > payload
-    user_id   = session.get('user_id')   or data.get("patient_id")
-    user_name = session.get('user_name') or data.get("user_name", "Guest")
-    role      = session.get('role')      or data.get("role", "guest")
-
-    if not session.get('user_id') and user_id and role == 'patient':
-        patient = Patient.query.get(user_id)
-        if patient:
-            session['user_id']   = patient.id
-            session['user_name'] = patient.name
-            session['role']      = 'patient'
+    # Resolve identity: Flask session only (never trust payload for auth)
+    user_id   = session.get('user_id')
+    user_name = session.get('user_name', 'Guest')
+    role      = session.get('role', 'guest')
 
     try:
         # --- Run AI enrichment in parallel context ---
@@ -1460,12 +1456,15 @@ def api_chat_ai():
 # --- 4. SIGNUP ---
 @app.route("/api/signup", methods=["POST"])
 def api_signup():
-    data = request.get_json()
+    data = request.get_json() or {}
     user_id = data.get("id")
     name = data.get("name")
     password = data.get("password")
     role = data.get("role")
-    
+
+    if not user_id or not name or not password or role not in ('patient', 'staff'):
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
+
     if role == 'patient':
         if Patient.query.get(user_id): return jsonify({"success": False, "error": "ID Taken"})
         case_num = data.get("case_number")
@@ -1488,7 +1487,10 @@ def api_triage_assess():
     Returns: { success, level (1-4), label, color, recommendation, department }
     """
     data = request.get_json(force=True) or {}
-    pain = int(data.get("painScore", 0))
+    try:
+        pain = int(data.get("painScore") or 0)
+    except (ValueError, TypeError):
+        pain = 0
     symptoms = data.get("symptoms", [])
     complaint = str(data.get("chiefComplaint", "")).lower()
     lang = data.get("lang", "en")
