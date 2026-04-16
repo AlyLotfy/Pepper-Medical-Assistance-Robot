@@ -359,8 +359,14 @@
 
     ws.send(JSON.stringify(payload));
 
+    // Disable ALL buttons while robot is moving
+    var buttons = listDiv.getElementsByClassName("nav-button");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].className = "nav-button offline";
+    }
+
     setStatus(
-      "Pepper is guiding you to " + target.room_name + ". Please follow the robot.",
+      "Guiding you to " + escapeHtml(target.name) + "'s room. Please follow Pepper.",
       "status-navigating"
     );
   }

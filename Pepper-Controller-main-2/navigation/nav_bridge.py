@@ -2,30 +2,34 @@
 # nav_bridge.py - Navigation Bridge for Pepper Robot
 # Layer: Robot Layer (Python 2.7, NAOqi environment)
 #
-# HOW IT WORKS:
-#   1. Connects to the WebSocket bridge (ws_bridge.py) running on the backend PC.
-#   2. Listens for {"type": "navigate", "target": [x, y, theta], ...} messages.
-#   3. Runs navigation in a daemon thread so the WebSocket heartbeat is never blocked.
-#   4. If a SLAM map (prototype_room.explo) is present -> uses ALNavigation.navigateToInMap
-#      which includes obstacle avoidance.
-#   5. If no map is present -> falls back to ALMotion.moveTo (relative movement, no map needed).
+# NAVIGATION STRATEGY (v2 - Segmented navigateTo):
+#   1. Uses ALNavigation.navigateTo() in segments of max 2.5m.
+#      navigateTo() has built-in obstacle avoidance using ALL sensors
+#      (sonar, depth camera, laser) — no SLAM map required.
+#   2. After each segment, re-reads hardware odometry via
+#      ALMotion.getRobotPosition(True) to compute remaining distance.
+#   3. If navigateTo() fails for a segment, falls back to ALMotion.moveTo().
+#   4. Each segment has a 45-second timeout to prevent hangs.
+#   5. Shows "Guiding you to Doctor's Room" on the tablet during navigation.
 #
-# GRADUATION DEFENSE NOTE:
-#   navigateToInMap() is a BLOCKING call. Running it on the main thread would freeze the
-#   WebSocket loop, causing the backend router to drop the connection due to missed heartbeats.
-#   We isolate it inside a daemon threading.Thread to avoid this critical failure.
+# WHY NOT SLAM:
+#   Pepper's built-in SLAM (navigateToInMap) is unreliable. The 15-beam
+#   base LIDAR produces sparse data that yields poor maps. Academic research
+#   confirms this. Segmented navigateTo() with real-time obstacle avoidance
+#   is far more reliable for a 10m-radius environment.
 #
 # USAGE:
-#   Run this script on the Pepper robot (or on the PC with pynaoqi SDK in PYTHONPATH):
-#       python nav_bridge.py
+#   python nav_bridge.py
 #
 # ENVIRONMENT VARIABLES (set by main.py):
 #   ROBOT_IP    - Pepper robot IP address (default: 127.0.0.1)
-#   ROBOT_PORT  - NAOqi port            (default: 9559)
-#   SERVER_IP   - Backend PC IP address (default: 192.168.1.50)
-#   WS_PORT     - WebSocket bridge port  (default: 8765)
+#   ROBOT_PORT  - NAOqi port              (default: 9559)
+#   SERVER_IP   - Backend PC IP address   (default: 192.168.1.50)
+#   SERVER_PORT - Flask server port       (default: 8080)
+#   WS_PORT     - WebSocket bridge port   (default: 8765)
 
 import json
+import math
 import threading
 import time
 import os
@@ -33,37 +37,45 @@ import sys
 
 from websocket import create_connection
 
-# NAOqi import with graceful fallback for development/testing without hardware
 try:
     from naoqi import ALProxy
     NAOQI_AVAILABLE = True
 except ImportError:
     NAOQI_AVAILABLE = False
-    print("[WARN] NAOqi SDK not found. Running in simulation mode (no robot movement).")
+    print("[WARN] NAOqi SDK not found. Running in simulation mode.")
+
+# Python 2 URL encoding
+try:
+    from urllib import quote as url_quote
+except ImportError:
+    from urllib.parse import quote as url_quote
 
 # =====================================================================
-# Configuration - read from environment variables (injected by main.py)
+# Configuration
 # =====================================================================
-ROBOT_IP   = os.environ.get("ROBOT_IP",  "127.0.0.1")
-ROBOT_PORT = int(os.environ.get("ROBOT_PORT", "9559"))
-SERVER_IP  = os.environ.get("SERVER_IP", "192.168.1.50")
-WS_PORT    = os.environ.get("WS_PORT",   "8765")
-SERVER_WS  = "ws://" + SERVER_IP + ":" + WS_PORT
+ROBOT_IP    = os.environ.get("ROBOT_IP",    "127.0.0.1")
+ROBOT_PORT  = int(os.environ.get("ROBOT_PORT", "9559"))
+SERVER_IP   = os.environ.get("SERVER_IP",   "192.168.1.50")
+SERVER_PORT = os.environ.get("SERVER_PORT", "8080")
+WS_PORT     = os.environ.get("WS_PORT",    "8765")
+SERVER_WS   = "ws://" + SERVER_IP + ":" + WS_PORT
+SERVER_URL  = "http://" + SERVER_IP + ":" + SERVER_PORT
 
-# Path to the voice flag file (MainVoice.py polls this to start recording)
-VOICE_DIR      = os.environ.get("VOICE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pepper_voice"))
+# Voice flag files (shared with MainVoice.py)
+VOICE_DIR       = os.environ.get("VOICE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pepper_voice"))
 VOICE_FLAG_FILE = os.path.join(VOICE_DIR, "voice_start.flag")
+LANG_FLAG_FILE  = os.path.join(VOICE_DIR, "lang.flag")
 
-# Language flag file: MainVoice.py reads this to know which language to use for TTS
-LANG_FLAG_FILE = os.path.join(VOICE_DIR, "lang.flag")
-
-# Path to the pre-recorded SLAM exploration map.
-# Generate this file once using map_exploration.py, then place it here.
-NAV_DIR  = os.path.dirname(os.path.abspath(__file__))
-MAP_PATH = os.path.join(NAV_DIR, "prototype_room.explo")
+# Navigation constants
+MAX_SEGMENT     = 2.5     # meters per navigateTo() call (API limit is 3m)
+ARRIVAL_THRESH  = 0.30    # meters — close enough to declare arrival
+SEGMENT_TIMEOUT = 45.0    # seconds — max time per segment before abort
+MAX_SEGMENTS    = 10      # safety cap — prevent infinite retry loops
+SECURITY_ORTHO  = 0.15    # reduced orthogonal collision distance (default 0.4)
+SECURITY_TAN    = 0.05    # reduced tangential collision distance (default 0.1)
 
 # =====================================================================
-# Global NAOqi Proxies and State
+# Global State
 # =====================================================================
 navigation_proxy = None
 tts_proxy        = None
@@ -71,18 +83,15 @@ motion_proxy     = None
 posture_proxy    = None
 awareness_proxy  = None
 battery_proxy    = None
-slam_map_loaded  = False
-is_navigating    = False          # Guard: prevent overlapping navigation threads
-ws_conn          = None           # Active WebSocket connection (set in run())
-current_lang     = "en"           # Current UI language (en or ar)
-
-# Accumulated pose from moveTo() calls (x_sum, y_sum, theta_sum)
-# Used to convert absolute targets into relative deltas for moveTo().
-current_pose     = [0.0, 0.0, 0.0]
+tablet_proxy     = None
+is_navigating    = False
+ws_conn          = None
+current_lang     = "en"
+nav_lock         = threading.Lock()
 
 
 def tts_say(text, lang=None):
-    """Speak text in the correct language. Switches TTS engine language if needed."""
+    """Speak text in the correct language."""
     if not tts_proxy:
         return
     if lang is None:
@@ -92,41 +101,36 @@ def tts_say(text, lang=None):
             tts_proxy.setLanguage("Arabic")
         else:
             tts_proxy.setLanguage("English")
-        tts_proxy.say(text.encode("utf-8"))
+        tts_proxy.say(text.encode("utf-8") if isinstance(text, bytes) is False else text)
     except Exception as e:
         print("[WARN] TTS failed: " + str(e))
 
+
 # =====================================================================
-# Startup Greeting – Wave and Self-Introduction
+# Startup Greeting
 # =====================================================================
 def _startup_greeting():
-    """Make Pepper wave its right hand and introduce itself after boot."""
+    """Wave and introduce Pepper on boot."""
     if not motion_proxy or not tts_proxy:
         return
     try:
         print("[GREET] Pepper is waving and introducing itself...")
-        # Raise right arm for a wave
         names  = ["RShoulderPitch", "RShoulderRoll", "RElbowRoll", "RWristYaw"]
-        # Arm up, slightly outward, elbow bent, wrist neutral
-        angles = [-0.2,             -0.3,            1.0,          0.0]
-        speed  = 0.15
-        motion_proxy.setAngles(names, angles, speed)
+        angles = [-0.2, -0.3, 1.0, 0.0]
+        motion_proxy.setAngles(names, angles, 0.15)
         time.sleep(0.6)
 
-        # Small wave motion (rotate wrist back and forth)
         for _ in range(3):
             motion_proxy.setAngles("RWristYaw", 0.5, 0.4)
             time.sleep(0.25)
             motion_proxy.setAngles("RWristYaw", -0.5, 0.4)
             time.sleep(0.25)
 
-        # Speak introduction while arm is still up
         tts_proxy.setLanguage("English")
         tts_proxy.say("Hello! I am Pepper, your medical assistant at Andalusia Hospital. "
                       "You can talk to me, or use the touchscreen to get started. "
                       "I am here to help!".encode("utf-8"))
 
-        # Return arm to rest position
         motion_proxy.setAngles(names, [1.5, 0.1, 0.5, 0.0], 0.15)
         time.sleep(0.5)
         print("[GREET] Startup greeting complete.")
@@ -135,18 +139,15 @@ def _startup_greeting():
 
 
 # =====================================================================
-# Robot Initialization and SLAM Boot Sequence
+# Robot Initialization
 # =====================================================================
 def init_robot():
     """
-    GRADUATION DEFENSE NOTE:
-    Initializes NAOqi hardware proxies and loads the SLAM exploration map
-    if one has been generated. The sequence follows the mandatory ALNavigation API:
-      1. loadExploration(path)      - Load .explo binary into memory
-      2. relocalizeInMap([0,0,0])   - Assume robot is at map origin on boot
-      3. startLocalization()        - Start LIDAR/sonar alignment background loop
+    Initialize NAOqi proxies. No SLAM map needed — we use segmented
+    ALNavigation.navigateTo() which has real-time obstacle avoidance.
     """
-    global navigation_proxy, tts_proxy, motion_proxy, posture_proxy, awareness_proxy, battery_proxy, slam_map_loaded
+    global navigation_proxy, tts_proxy, motion_proxy, posture_proxy
+    global awareness_proxy, battery_proxy, tablet_proxy
 
     if not NAOQI_AVAILABLE:
         print("[WARN] Hardware initialization skipped (NAOqi not available).")
@@ -158,16 +159,26 @@ def init_robot():
         motion_proxy     = ALProxy("ALMotion",       ROBOT_IP, ROBOT_PORT)
         navigation_proxy = ALProxy("ALNavigation",   ROBOT_IP, ROBOT_PORT)
         posture_proxy    = ALProxy("ALRobotPosture", ROBOT_IP, ROBOT_PORT)
+
+        # Battery check
         try:
             battery_proxy = ALProxy("ALBattery", ROBOT_IP, ROBOT_PORT)
             charge = battery_proxy.getBatteryCharge()
             print("[INIT] Battery level: " + str(charge) + "%")
             if charge < 30:
-                print("[WARN] Battery below 30% — movement distance may be inaccurate.")
+                print("[WARN] Battery below 30% — navigation may be less accurate.")
         except Exception as e:
-            print("[INIT] Could not read battery level: " + str(e))
+            print("[INIT] Could not read battery: " + str(e))
 
-        # Step 1: Disable autonomous life (prevents behaviour takeover)
+        # Tablet proxy (for showing navigation page)
+        try:
+            tablet_proxy = ALProxy("ALTabletService", ROBOT_IP, ROBOT_PORT)
+            print("[INIT] ALTabletService connected.")
+        except Exception as e:
+            print("[INIT] Could not connect ALTabletService: " + str(e))
+            tablet_proxy = None
+
+        # Disable autonomous life (prevents behaviour takeover)
         try:
             life_proxy = ALProxy("ALAutonomousLife", ROBOT_IP, ROBOT_PORT)
             life_proxy.setState("disabled")
@@ -175,8 +186,7 @@ def init_robot():
         except Exception as e:
             print("[INIT] Could not disable ALAutonomousLife: " + str(e))
 
-        # Step 2: Pause basic awareness (mirrors peppergui.py set_awareness(False))
-        # ALBasicAwareness intercepts motion commands silently when active
+        # Pause basic awareness (intercepts motion commands silently)
         try:
             awareness_proxy = ALProxy("ALBasicAwareness", ROBOT_IP, ROBOT_PORT)
             awareness_proxy.pauseAwareness()
@@ -184,43 +194,33 @@ def init_robot():
         except Exception as e:
             print("[INIT] Could not pause ALBasicAwareness: " + str(e))
 
-        # Step 3: Wake motors and stand (mirrors peppergui.py stand())
+        # Wake motors and stand
         motion_proxy.wakeUp()
         posture_proxy.goToPosture("Stand", 1.0)
         print("[INIT] Robot standing.")
 
+        # Initialize odometry reference point
         motion_proxy.moveInit()
+        print("[INIT] Odometry reference set (current position = origin).")
 
-        # Try to load the pre-recorded SLAM map
-        if os.path.exists(MAP_PATH):
-            print("[INIT] SLAM map found. Loading: " + MAP_PATH)
-            navigation_proxy.loadExploration(MAP_PATH)
-
-            # Assert robot starts at map origin [0, 0, 0]
-            navigation_proxy.relocalizeInMap([0.0, 0.0, 0.0])
-
-            # Engage the background localization loop (LIDAR/sonar vs map)
-            navigation_proxy.startLocalization()
-
-            slam_map_loaded = True
-            print("[INIT] SLAM localization active. Using navigateToInMap().")
-        else:
-            print("[INIT] No SLAM map at: " + MAP_PATH)
-            print("[INIT] Falling back to ALMotion.moveTo() (relative movement).")
-            print("[INIT] Run map_exploration.py to build a map for full SLAM support.")
-            slam_map_loaded = False
+        # Set reduced collision distances (not disabled — just tighter for demo room)
+        try:
+            motion_proxy.setOrthogonalSecurityDistance(SECURITY_ORTHO)
+            motion_proxy.setTangentialSecurityDistance(SECURITY_TAN)
+            print("[INIT] Collision distances reduced: ortho={}, tan={}".format(
+                SECURITY_ORTHO, SECURITY_TAN))
+        except Exception as e:
+            print("[INIT] Could not set security distances: " + str(e))
 
         print("[INIT] Hardware initialization complete.")
-        # Greet users with a wave and self-introduction
+        print("[INIT] Using segmented ALNavigation.navigateTo() (no SLAM map needed).")
         _startup_greeting()
         return True
 
     except Exception as e:
         print("[ERROR] Hardware initialization failed: " + str(e))
-        print("[INFO] Will retry hardware init in 5 seconds...")
+        print("[INFO] Retrying in 5 seconds...")
         time.sleep(5)
-        # Retry once — the most common cause is a session collision with
-        # show_tablet.py that has now exited and freed the broker.
         try:
             print("[INIT] Retrying NAOqi connection...")
             tts_proxy        = ALProxy("ALTextToSpeech", ROBOT_IP, ROBOT_PORT)
@@ -230,158 +230,278 @@ def init_robot():
             motion_proxy.wakeUp()
             posture_proxy.goToPosture("Stand", 1.0)
             motion_proxy.moveInit()
-            print("[INIT] Retry succeeded. Hardware ready.")
+            print("[INIT] Retry succeeded.")
             return True
         except Exception as e2:
             print("[ERROR] Retry also failed: " + str(e2))
             return False
 
+
 # =====================================================================
-# Navigation Execution - runs inside a daemon thread
+# Tablet Display Control
+# =====================================================================
+def show_navigating_screen(doctor_name, room_name):
+    """Show 'Guiding you to Doctor's Room' on Pepper's tablet."""
+    if not tablet_proxy:
+        return
+    try:
+        doc_enc  = url_quote(doctor_name.encode("utf-8") if isinstance(doctor_name, bytes) is False else doctor_name)
+        room_enc = url_quote(room_name.encode("utf-8") if isinstance(room_name, bytes) is False else room_name)
+        url = "{}/static/navigating.html?doctor={}&room={}".format(
+            SERVER_URL, doc_enc, room_enc)
+        print("[TABLET] Showing navigation screen: " + url)
+        tablet_proxy.loadUrl(url)
+    except Exception as e:
+        print("[TABLET] Could not show navigation screen: " + str(e))
+
+
+def restore_home_screen():
+    """Restore the default home page on the tablet."""
+    if not tablet_proxy:
+        return
+    try:
+        tablet_proxy.loadUrl(SERVER_URL)
+        print("[TABLET] Restored home screen.")
+    except Exception as e:
+        print("[TABLET] Could not restore home screen: " + str(e))
+
+
+# =====================================================================
+# Coordinate Math
+# =====================================================================
+def world_to_robot(dx_world, dy_world, heading):
+    """
+    Transform a world-frame delta into robot-frame coordinates.
+    Robot frame: x = forward, y = left.
+    """
+    cos_h = math.cos(-heading)
+    sin_h = math.sin(-heading)
+    dx_robot = dx_world * cos_h - dy_world * sin_h
+    dy_robot = dx_world * sin_h + dy_world * cos_h
+    return dx_robot, dy_robot
+
+
+def get_remaining(target_x, target_y, target_theta):
+    """
+    Compute remaining distance and robot-frame deltas from current
+    hardware odometry to the target.
+    Returns: (dx_robot, dy_robot, remaining_theta, distance, current_pos)
+    """
+    pos = motion_proxy.getRobotPosition(True)  # [x, y, theta] in world frame
+    cx, cy, ch = pos[0], pos[1], pos[2]
+
+    dx_world = target_x - cx
+    dy_world = target_y - cy
+    dx_robot, dy_robot = world_to_robot(dx_world, dy_world, ch)
+
+    distance = math.sqrt(dx_robot ** 2 + dy_robot ** 2)
+    remaining_theta = target_theta - ch
+
+    # Normalize theta to [-pi, pi]
+    while remaining_theta > math.pi:
+        remaining_theta -= 2 * math.pi
+    while remaining_theta < -math.pi:
+        remaining_theta += 2 * math.pi
+
+    return dx_robot, dy_robot, remaining_theta, distance, (cx, cy, ch)
+
+
+# =====================================================================
+# Navigation Execution (runs in daemon thread)
 # =====================================================================
 def send_nav_status(msg_type, room_name, doctor_name):
-    """Send a navigation status message back through the WebSocket so guide.html can update."""
-    global ws_conn
+    """Send navigation status back through WebSocket."""
     if ws_conn is None:
         return
     try:
-        payload = json.dumps({
+        ws_conn.send(json.dumps({
             "type":        msg_type,
             "room_name":   room_name,
             "doctor_name": doctor_name
-        })
-        ws_conn.send(payload)
+        }))
     except Exception as e:
         print("[WARN] Could not send nav status: " + str(e))
 
 
+def _navigate_segment(dx, dy, use_nav=True):
+    """
+    Move one segment. Returns True if successful.
+    Uses navigateTo() with obstacle avoidance, falls back to moveTo().
+    Has a per-segment timeout to prevent hangs.
+    """
+    timed_out = [False]
+
+    def on_timeout():
+        timed_out[0] = True
+        print("[NAV] Segment timed out after {}s — stopping.".format(SEGMENT_TIMEOUT))
+        try:
+            navigation_proxy.stopNavigation()
+        except Exception:
+            pass
+        try:
+            motion_proxy.stopMove()
+        except Exception:
+            pass
+
+    timer = threading.Timer(SEGMENT_TIMEOUT, on_timeout)
+    timer.daemon = True
+    timer.start()
+
+    success = False
+    try:
+        if use_nav and navigation_proxy:
+            # navigateTo() has built-in obstacle avoidance
+            print("[NAV]   navigateTo({:.2f}, {:.2f})".format(dx, dy))
+            navigation_proxy.navigateTo(dx, dy)
+            success = not timed_out[0]
+        else:
+            raise RuntimeError("Skipping navigateTo — using moveTo fallback")
+    except Exception as e:
+        if not timed_out[0]:
+            print("[NAV]   navigateTo failed: {}. Trying moveTo...".format(str(e)))
+            timer.cancel()
+            # Reset timeout for moveTo attempt
+            timed_out[0] = False
+            timer = threading.Timer(SEGMENT_TIMEOUT, on_timeout)
+            timer.daemon = True
+            timer.start()
+            try:
+                motion_proxy.moveTo(dx, dy, 0)
+                success = not timed_out[0]
+            except Exception as e2:
+                print("[NAV]   moveTo also failed: " + str(e2))
+    finally:
+        timer.cancel()
+
+    return success
+
+
 def execute_navigation(target_coords, doctor_name, room_name):
     """
-    GRADUATION DEFENSE NOTE:
-    This function is dispatched to a daemon threading.Thread.
-    navigateToInMap() is a blocking call that halts execution for the entire
-    navigation duration (potentially 20-60+ seconds). Running it here keeps
-    the main thread free to process WebSocket PING/PONG heartbeats, preventing
-    the backend router from declaring the connection dead and severing it.
-
-    Error codes from navigateToInMap():
-      0 = OK:             Robot reached exact target coordinates.
-      1 = KO:             Path blocked or target outside mapped area.
-      2 = Constraint KO:  Target reached but spatial constraints unfulfilled.
+    Navigate to target using segmented approach:
+    1. Show "Guiding you" on tablet
+    2. Loop: compute remaining distance, move up to 2.5m per segment
+    3. Adjust final heading
+    4. Announce arrival, restore tablet
     """
     global is_navigating
 
     try:
-        x     = float(target_coords[0])
-        y     = float(target_coords[1])
-        theta = float(target_coords[2])
+        tx = float(target_coords[0])
+        ty = float(target_coords[1])
+        ttheta = float(target_coords[2])
 
-        # Announce the navigation to the patient
-        announcement = "Please follow me to " + str(doctor_name) + " in " + str(room_name) + "."
-        print("[NAV] " + announcement)
-        if tts_proxy:
-            tts_proxy.say(announcement.encode("utf-8"))
+        # Show navigation screen on tablet
+        show_navigating_screen(doctor_name, room_name)
 
-        # ---------------------------------------------------------------
-        # PRIMARY PATH: SLAM-based navigation (requires prototype_room.explo)
-        # ---------------------------------------------------------------
-        if navigation_proxy and slam_map_loaded:
-            print("[NAV] Using SLAM: navigateToInMap([" + str(x) + ", " + str(y) + ", " + str(theta) + "])")
-            result_code = navigation_proxy.navigateToInMap([x, y, theta])
-
-            if result_code == 0:
-                success_msg = "We have arrived at " + str(room_name) + ". The doctor will see you shortly."
-                if tts_proxy:
-                    tts_proxy.say(success_msg.encode("utf-8"))
-                print("[NAV] Destination reached. Code: 0 (OK)")
-                send_nav_status("nav_complete", room_name, doctor_name)
-
-            else:
-                # Code 1 (KO) or Code 2 (Constraint KO) - both indicate failure
-                raise RuntimeError("SLAM engine aborted. Error code: " + str(result_code))
-
-        # ---------------------------------------------------------------
-        # FALLBACK PATH: Direct relative movement (no map required)
-        # ---------------------------------------------------------------
-        elif motion_proxy:
-            # navigation_targets.json stores ABSOLUTE coordinates.
-            # moveTo() is RELATIVE to the robot's current pose.
-            # Compute the delta from our tracked cumulative pose.
-            global current_pose
-            dx     = x     - current_pose[0]
-            dy     = y     - current_pose[1]
-            dtheta = theta - current_pose[2]
-
-            print("[NAV] Target absolute: ({}, {}, {})".format(x, y, theta))
-            print("[NAV] Current  pose:   ({}, {}, {})".format(*current_pose))
-            print("[NAV] Relative moveTo:  ({}, {}, {})".format(dx, dy, dtheta))
-
-            # Log battery level so we can spot power-related short movements
-            if battery_proxy:
-                try:
-                    charge = battery_proxy.getBatteryCharge()
-                    print("[NAV] Battery: " + str(charge) + "%")
-                    if charge < 30:
-                        print("[WARN] Low battery — movement may be cut short.")
-                except Exception:
-                    pass
-
-            # Pause awareness before moving
-            if awareness_proxy:
-                try:
-                    awareness_proxy.pauseAwareness()
-                except Exception:
-                    pass
-
-            # Disable external collision protection so sonar false-positives
-            # (e.g. furniture in the demo room) do not cut the movement short.
-            # Re-enabled immediately after moveTo returns.
+        # Pause awareness during navigation
+        if awareness_proxy:
             try:
-                motion_proxy.setExternalCollisionProtectionEnabled("Move", False)
+                awareness_proxy.pauseAwareness()
             except Exception:
                 pass
 
-            motion_proxy.moveInit()
-            # RELATIVE delta: move from current tracked pose to target pose.
-            # Blocking call — safe because this runs inside a daemon thread.
-            motion_proxy.moveTo(dx, dy, dtheta)
-
-            # Update tracked pose so next delta is correct
-            current_pose = [x, y, theta]
-
-            # Re-enable collision protection after arriving
-            try:
-                motion_proxy.setExternalCollisionProtectionEnabled("Move", True)
-            except Exception:
-                pass
-
-            # Resume awareness after arriving (mirrors peppergui set_awareness(True))
-            if awareness_proxy:
-                try:
-                    awareness_proxy.resumeAwareness()
-                except Exception:
-                    pass
-
-            if current_lang == "ar":
-                arrival_msg = u"\u0644\u0642\u062f \u0648\u0635\u0644\u0646\u0627. \u0647\u0630\u0627 \u0647\u0648 " + str(room_name) + "."
-            else:
-                arrival_msg = "We have arrived. This is " + str(room_name) + "."
-            tts_say(arrival_msg)
-            print("[NAV] moveTo complete.")
-            send_nav_status("nav_complete", room_name, doctor_name)
-
-        # ---------------------------------------------------------------
-        # SIMULATION: No hardware available
-        # ---------------------------------------------------------------
+        # Announce
+        if current_lang == "ar":
+            announcement = u"\u062a\u0627\u0628\u0639\u0646\u064a \u0625\u0644\u0649 " + str(room_name)
         else:
-            print("[SIM] Simulating navigation to: " + str(target_coords))
-            time.sleep(3)
-            print("[SIM] Navigation simulation complete.")
+            announcement = "Please follow me to " + str(doctor_name) + "'s room."
+        print("[NAV] " + announcement)
+        tts_say(announcement)
+
+        # Ensure robot is standing and ready
+        try:
+            motion_proxy.moveInit()
+        except Exception:
+            pass
+
+        # Log battery
+        if battery_proxy:
+            try:
+                charge = battery_proxy.getBatteryCharge()
+                print("[NAV] Battery: {}%".format(charge))
+            except Exception:
+                pass
+
+        # ---------------------------------------------------------------
+        # SEGMENTED NAVIGATION LOOP
+        # ---------------------------------------------------------------
+        segment_count = 0
+        while segment_count < MAX_SEGMENTS:
+            dx_r, dy_r, dtheta, dist, pos = get_remaining(tx, ty, ttheta)
+            print("[NAV] Segment {}: dist={:.2f}m, pos=({:.2f}, {:.2f}, {:.2f}rad)".format(
+                segment_count + 1, dist, pos[0], pos[1], pos[2]))
+
+            # Close enough — stop moving
+            if dist < ARRIVAL_THRESH:
+                print("[NAV] Within arrival threshold ({:.2f}m < {:.2f}m).".format(
+                    dist, ARRIVAL_THRESH))
+                break
+
+            # Clamp segment to MAX_SEGMENT meters
+            if dist > MAX_SEGMENT:
+                ratio = MAX_SEGMENT / dist
+                seg_x = dx_r * ratio
+                seg_y = dy_r * ratio
+            else:
+                seg_x = dx_r
+                seg_y = dy_r
+
+            success = _navigate_segment(seg_x, seg_y, use_nav=True)
+            segment_count += 1
+
+            if not success:
+                print("[NAV] Segment {} failed. Attempting one retry...".format(segment_count))
+                # Small pause and retry the same segment once
+                time.sleep(1.0)
+                dx_r, dy_r, dtheta, dist, pos = get_remaining(tx, ty, ttheta)
+                if dist < ARRIVAL_THRESH:
+                    break
+                if dist > MAX_SEGMENT:
+                    ratio = MAX_SEGMENT / dist
+                    seg_x = dx_r * ratio
+                    seg_y = dy_r * ratio
+                else:
+                    seg_x = dx_r
+                    seg_y = dy_r
+                success2 = _navigate_segment(seg_x, seg_y, use_nav=False)
+                segment_count += 1
+                if not success2:
+                    print("[NAV] Retry also failed. Stopping navigation.")
+                    raise RuntimeError("Navigation blocked after retry.")
+
+            time.sleep(0.3)  # Brief pause between segments
+
+        # ---------------------------------------------------------------
+        # FINAL HEADING ADJUSTMENT
+        # ---------------------------------------------------------------
+        _, _, dtheta, _, _ = get_remaining(tx, ty, ttheta)
+        if abs(dtheta) > 0.15:  # > ~8 degrees
+            print("[NAV] Adjusting heading by {:.2f} rad".format(dtheta))
+            try:
+                motion_proxy.moveTo(0, 0, dtheta)
+            except Exception:
+                pass
+
+        # ---------------------------------------------------------------
+        # ARRIVAL
+        # ---------------------------------------------------------------
+        if current_lang == "ar":
+            arrival_msg = u"\u0644\u0642\u062f \u0648\u0635\u0644\u0646\u0627. \u0647\u0630\u0627 \u0647\u0648 " + str(room_name) + "."
+        else:
+            arrival_msg = "We have arrived at " + str(room_name) + ". The doctor will see you shortly."
+        tts_say(arrival_msg)
+        print("[NAV] Arrived at " + room_name)
+        send_nav_status("nav_complete", room_name, doctor_name)
+
+        # Wait a moment then restore the home screen
+        time.sleep(3)
+        restore_home_screen()
 
     except Exception as e:
         print("[ERROR] Navigation failed: " + str(e))
 
-        # SAFETY MITIGATION: Immediately stop all motor commands
+        # Safety: stop all movement
         try:
             if navigation_proxy:
                 navigation_proxy.stopNavigation()
@@ -390,57 +510,67 @@ def execute_navigation(target_coords, doctor_name, room_name):
         except Exception:
             pass
 
-        # Verbally inform the patient of the failure
-        try:
-            if current_lang == "ar":
-                tts_say(u"\u062a\u0645 \u0625\u0644\u063a\u0627\u0621 \u0627\u0644\u062a\u0648\u062c\u064a\u0647.", "ar")
-            else:
-                tts_say("Navigation cancelled.", "en")
-        except Exception:
-            pass
+        # Inform patient
+        if current_lang == "ar":
+            tts_say(u"\u0639\u0630\u0631\u0627\u060c \u062a\u0645 \u0625\u0644\u063a\u0627\u0621 \u0627\u0644\u062a\u0648\u062c\u064a\u0647.", "ar")
+        else:
+            tts_say("I'm sorry, navigation was interrupted. Please ask staff for assistance.", "en")
+
         send_nav_status("nav_failed", room_name, doctor_name)
 
+        # Restore home screen after failure too
+        time.sleep(2)
+        restore_home_screen()
+
     finally:
-        # Always release the navigation lock so future requests are accepted
-        is_navigating = False
+        # Resume awareness
+        if awareness_proxy:
+            try:
+                awareness_proxy.resumeAwareness()
+            except Exception:
+                pass
+        with nav_lock:
+            is_navigating = False
+
 
 # =====================================================================
 # WebSocket Message Handler
 # =====================================================================
 def handle_navigate(data):
-    """
-    Validates the incoming navigate payload and dispatches a daemon thread.
-    """
+    """Validate navigate payload and dispatch daemon thread."""
     global is_navigating
 
-    if is_navigating:
-        print("[NAV] Already navigating. Ignoring duplicate request.")
-        return
+    with nav_lock:
+        if is_navigating:
+            print("[NAV] Already navigating. Ignoring duplicate request.")
+            return
+        is_navigating = True
 
     target      = data.get("target")
     doctor_name = data.get("doctor_name", "the doctor")
     room_name   = data.get("room_name",   "the destination")
 
-    # Validate the spatial coordinate array
     if not target or not isinstance(target, list) or len(target) != 3:
-        print("[ERROR] Invalid or missing target coordinates: " + str(target))
+        print("[ERROR] Invalid target coordinates: " + str(target))
+        with nav_lock:
+            is_navigating = False
         return
-
-    is_navigating = True
 
     nav_thread = threading.Thread(
         target=execute_navigation,
         args=(target, doctor_name, room_name)
     )
-    nav_thread.daemon = True   # Daemon thread exits when main thread exits
+    nav_thread.daemon = True
     nav_thread.start()
+
 
 # =====================================================================
 # Main WebSocket Client Loop
 # =====================================================================
 def run():
     print("==============================================")
-    print("   PEPPER NAVIGATION BRIDGE")
+    print("   PEPPER NAVIGATION BRIDGE v2")
+    print("   Strategy: Segmented navigateTo()")
     print("   Target WS: " + SERVER_WS)
     print("==============================================")
 
@@ -452,13 +582,9 @@ def run():
             ws = create_connection(SERVER_WS)
             global ws_conn, current_lang
             ws_conn = ws
-            # Identify this client to the bridge router
             ws.send(json.dumps({"type": "hello", "role": "nav_bridge"}))
             print("[INFO] Connected to WebSocket bridge.")
 
-            # Initialize hardware AFTER connecting so messages sent during
-            # startup are buffered in TCP and processed once the inner loop
-            # starts — instead of being lost while nav_bridge wasn't connected.
             if not hardware_initialized:
                 init_robot()
                 hardware_initialized = True
@@ -476,7 +602,6 @@ def run():
                         handle_navigate(data)
 
                     elif msg_type == "say":
-                        # TTS command from emergency.html or other pages
                         text = data.get("text", "")
                         lang = data.get("lang", current_lang)
                         if tts_proxy and text:
@@ -487,17 +612,14 @@ def run():
                                 print("[WARN] TTS failed: " + str(e))
 
                     elif msg_type == "look_up":
-                        # Tilt head up so the top camera faces the user standing in front
                         if motion_proxy:
                             try:
-                                # HeadPitch: negative = look up, positive = look down
                                 motion_proxy.setAngles("HeadPitch", -0.30, 0.15)
                                 print("[HEAD] Looking up for face capture.")
                             except Exception as e:
                                 print("[WARN] Head tilt failed: " + str(e))
 
                     elif msg_type == "look_reset":
-                        # Return head to neutral position
                         if motion_proxy:
                             try:
                                 motion_proxy.setAngles("HeadPitch", 0.0, 0.15)
@@ -506,20 +628,17 @@ def run():
                                 print("[WARN] Head reset failed: " + str(e))
 
                     elif msg_type == "start_recording":
-                        # Update language from UI
                         lang = data.get("lang", "en")
                         current_lang = lang
-                        # Write language flag for MainVoice.py
                         try:
                             with open(LANG_FLAG_FILE, "w") as _lf:
                                 _lf.write(lang)
                         except Exception:
                             pass
-                        # Signal MainVoice.py to start recording via flag file
                         try:
                             with open(VOICE_FLAG_FILE, "w") as _f:
                                 _f.write("1")
-                            print("[VOICE] Flag file created (" + lang + "): " + VOICE_FLAG_FILE)
+                            print("[VOICE] Flag file created (" + lang + ")")
                         except Exception as e:
                             print("[WARN] Could not create voice flag: " + str(e))
 
@@ -534,14 +653,6 @@ def run():
 
         except KeyboardInterrupt:
             print("\n[INFO] Navigation Bridge shutting down gracefully...")
-            # DEFENSE NOTE: stopLocalization frees significant CPU overhead
-            # consumed by the continuous LIDAR/sonar comparison loop.
-            if navigation_proxy and slam_map_loaded:
-                try:
-                    navigation_proxy.stopLocalization()
-                    print("[INFO] SLAM localization stopped.")
-                except Exception:
-                    pass
             break
 
         except Exception as e:
@@ -555,6 +666,7 @@ def run():
                     ws.close()
                 except Exception:
                     pass
+
 
 if __name__ == "__main__":
     run()
