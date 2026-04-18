@@ -2,7 +2,14 @@
 from naoqi import ALProxy
 import time
 import os
+import subprocess
 import requests
+
+# Python 2/3 compatible text type check
+try:
+    _text_type = unicode   # Python 2
+except NameError:
+    _text_type = str       # Python 3
 
 # -------------------------------------------------------
 # CONFIGURATION (DYNAMIC FROM MAIN.PY LAUNCHER)
@@ -100,10 +107,11 @@ def record_audio():
 
     print("[INFO] Recording done. Transferring audio...")
 
-    cmd = '"{}" -pw nao nao@{}:{} {}'.format(
-        PSCP, PEPPER_IP, PEPPER_FILE, LOCAL_FILE
+    # Use a list — never a shell string — to prevent command injection
+    subprocess.run(
+        [PSCP, "-pw", "nao", "nao@{}:{}".format(PEPPER_IP, PEPPER_FILE), LOCAL_FILE],
+        check=False
     )
-    os.system(cmd)
 
 # -------------------------------------------------------
 # OFFLINE VOICE FALLBACK (ALSpeechRecognition)
@@ -285,8 +293,8 @@ while True:
             except UnicodeEncodeError:
                 print("[PEPPER REPLY]: (non-ASCII reply, cannot display in console)")
 
-            # ALWAYS convert to UTF-8 to prevent NAOqi crash
-            if isinstance(reply, unicode):
+            # ALWAYS convert to UTF-8 to prevent NAOqi crash (Python 2/3 safe)
+            if isinstance(reply, _text_type):
                 reply = reply.encode("utf-8")
 
             # Set TTS language based on UI preference before speaking reply

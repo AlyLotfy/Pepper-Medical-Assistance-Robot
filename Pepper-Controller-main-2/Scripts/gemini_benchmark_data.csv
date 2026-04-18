@@ -1,0 +1,11 @@
+Timestamp,Prompt,Word_Count,Latency_Sec,Success
+10:00:51,Hello.,1,2.018,Yes
+10:00:58,What are the visiting hours?,5,2.402,Yes
+10:01:04,I have a severe headache and my blood pressure is high.,11,1.742,Yes
+10:01:09,Book an appointment with Doctor Ahmed in the cardiology department.,10,1.765,Yes
+10:01:16,Can you give me health tips for managing diabetes and hypertension at home?,13,2.882,Yes
+10:01:23,Where is the bathroom?,4,2.708,Yes
+10:01:30,"I am feeling dizzy and nauseous, what should I do?",10,2.558,Yes
+10:01:36,Tell me about the pediatric services available in this hospital.,10,2.82,Yes
+10:01:42,How do I check in for my 3:00 PM appointment?,10,1.974,Yes
+10:01:48,Thank you for your help.,5,1.43,Yes

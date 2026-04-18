@@ -309,6 +309,34 @@ def get_remaining(target_x, target_y, target_theta):
 # =====================================================================
 # Navigation Execution (runs in daemon thread)
 # =====================================================================
+def _slog_nav(action, destination, success=True, elapsed_s=None, reason=None, doctor=None):
+    """Post a navigation event to the Flask session logger. Never raises."""
+    try:
+        payload = {"action": action, "success": success,
+                   "details": {"destination": destination, "doctor": doctor or ""}}
+        if elapsed_s is not None:
+            payload["details"]["elapsed_s"] = round(elapsed_s, 1)
+        if reason:
+            payload["details"]["reason"] = str(reason)
+        body = json.dumps(payload).encode("utf-8")
+        try:
+            # Python 2.7
+            import urllib2 as _urllib
+            req = _urllib.Request(SERVER_URL + "/api/session/event",
+                                  data=body,
+                                  headers={"Content-Type": "application/json"})
+            _urllib.urlopen(req, timeout=2)
+        except ImportError:
+            # Python 3
+            import urllib.request as _urllib
+            req = _urllib.Request(SERVER_URL + "/api/session/event",
+                                  data=body,
+                                  headers={"Content-Type": "application/json"})
+            _urllib.urlopen(req, timeout=2)
+    except Exception:
+        pass
+
+
 def send_nav_status(msg_type, room_name, doctor_name):
     """Send navigation status back through WebSocket."""
     if ws_conn is None:
@@ -386,10 +414,15 @@ def execute_navigation(target_coords, doctor_name, room_name):
     """
     global is_navigating
 
+    # Set start time at the very top so the except block can always reference it
+    _nav_start_time = time.time()
+
     try:
         tx = float(target_coords[0])
         ty = float(target_coords[1])
         ttheta = float(target_coords[2])
+
+        _slog_nav("navigation_started", destination=room_name, doctor=doctor_name)
 
         # Show navigation screen on tablet
         show_navigating_screen(doctor_name, room_name)
@@ -492,6 +525,8 @@ def execute_navigation(target_coords, doctor_name, room_name):
             arrival_msg = "We have arrived at " + str(room_name) + ". The doctor will see you shortly."
         tts_say(arrival_msg)
         print("[NAV] Arrived at " + room_name)
+        _slog_nav("navigation_done", destination=room_name, success=True,
+                  elapsed_s=time.time() - _nav_start_time, doctor=doctor_name)
         send_nav_status("nav_complete", room_name, doctor_name)
 
         # Wait a moment then restore the home screen
@@ -500,6 +535,8 @@ def execute_navigation(target_coords, doctor_name, room_name):
 
     except Exception as e:
         print("[ERROR] Navigation failed: " + str(e))
+        _slog_nav("navigation_failed", destination=room_name, success=False,
+                  elapsed_s=time.time() - _nav_start_time, reason=str(e), doctor=doctor_name)
 
         # Safety: stop all movement
         try:
@@ -556,12 +593,18 @@ def handle_navigate(data):
             is_navigating = False
         return
 
-    nav_thread = threading.Thread(
-        target=execute_navigation,
-        args=(target, doctor_name, room_name)
-    )
-    nav_thread.daemon = True
-    nav_thread.start()
+    try:
+        nav_thread = threading.Thread(
+            target=execute_navigation,
+            args=(target, doctor_name, room_name)
+        )
+        nav_thread.daemon = True
+        nav_thread.start()
+    except Exception as e:
+        # Thread failed to start — unlock immediately so the next request can try
+        print("[ERROR] Failed to start navigation thread: " + str(e))
+        with nav_lock:
+            is_navigating = False
 
 
 # =====================================================================

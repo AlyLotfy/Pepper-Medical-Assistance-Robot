@@ -1,12 +1,57 @@
-nose==1.3.7
-vokativ==1.2.1
+# Pepper Controller — Python dependencies
+# Run: pip install -r requirements.txt
+
+# ── Robot / NAOqi communication ──────────────────────────────────────────────
 paramiko==2.7.2
-pyyaml==5.3.1
-playsound==1.3.0
 scp==0.14.1
-numpy
-pillow
+
+# ── Core robot control ────────────────────────────────────────────────────────
+pyyaml==5.3.1
 pygubu
+numpy
+
+# ── Audio / Speech ────────────────────────────────────────────────────────────
 speechrecognition==3.8.1
-tk
+playsound==1.3.0
 gtts
+faster-whisper
+
+# ── Flask backend ─────────────────────────────────────────────────────────────
+Flask
+Flask-SQLAlchemy
+Werkzeug
+requests
+
+# ── AI / ML ───────────────────────────────────────────────────────────────────
+# FAISS (CPU — install one of):
+#   pip install faiss-cpu          (most systems)
+#   conda install -c conda-forge faiss-cpu
+faiss-cpu
+
+# Sentence embeddings for RAG
+sentence-transformers
+
+# ── Computer Vision ───────────────────────────────────────────────────────────
+opencv-python
+Pillow
+
+# MediaPipe — optional, improves fall detection accuracy
+# Uncomment to install:
+# mediapipe
+
+# ── PDF generation (triage export) ───────────────────────────────────────────
+fpdf2
+
+# ── Offline Translation (OPTIONAL — improves translator.py offline tier) ─────
+# After installing, download Arabic<->English packages:
+#   python -c "
+#     import argostranslate.package, argostranslate.translate
+#     argostranslate.package.update_package_index()
+#     for p in argostranslate.package.get_available_packages():
+#         if p.from_code in ('en','ar') and p.to_code in ('en','ar'):
+#             p.install()
+#   "
+# argostranslate
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv

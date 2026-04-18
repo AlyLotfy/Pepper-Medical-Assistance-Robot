@@ -1,0 +1,17 @@
+====================================================
+   GEMINI AI LATENCY EVALUATION REPORT
+====================================================
+
+1. TEST OVERVIEW
+- Total Simulated Queries: 10
+- Successful API Calls: 10
+- Reliability Rate: 100.00%
+
+2. RESPONSE TIME METRICS (SECONDS)
+- Average Latency (TAT): 2.230 s
+- Fastest Response:      1.430 s
+- Slowest Response:      2.882 s
+
+Note: These metrics isolate the AI processing time and exclude 
+audio transcription and network transfer overhead from the robot.
+====================================================

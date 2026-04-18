@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pepper Live Stream</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <style>
+        body {
+            font-family: sans-serif;
+            background: linear-gradient(135deg, #f7f4f0, #ffffff);
+            height: 100vh; margin: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+        }
+        .card {
+            background: white; padding: 20px; border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            text-align: center; width: 90%; max-width: 600px;
+        }
+        h1 { color: #5a4a3b; margin-bottom: 15px; }
+        .video-box {
+            width: 100%; height: auto; min-height: 240px;
+            background: #000; border-radius: 12px;
+            border: 4px solid #b89a6c;
+            display: flex; align-items: center; justify-content: center;
+        }
+        img { width: 100%; border-radius: 8px; display: block; }
+        .status { margin-top: 10px; color: #888; font-size: 14px; }
+        .back-btn {
+            position: absolute; top: 20px; left: 20px;
+            width: 40px; height: 40px; border-radius: 50%;
+            background: #b89a6c; color: white; border: none;
+            font-size: 20px; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <button class="back-btn" onclick="location.href='index.html'">&#8592;</button>
+
+    <div class="card">
+        <h1>Live Camera Feed</h1>
+        <div class="video-box">
+            <img id="stream" src="" alt="Waiting for Signal...">
+        </div>
+        <p class="status" id="status">Connecting to FastAPI...</p>
+    </div>
+
+    <script>
+        // Connect to FastAPI WebSocket
+        // Assumes FastAPI is running on port 8000
+        var host = window.location.hostname || "localhost";
+        var ws = new WebSocket("ws://" + host + ":8000/ws");
+        
+        var img = document.getElementById("stream");
+        var statusText = document.getElementById("status");
+
+        ws.onopen = function() {
+            statusText.textContent = "● Live Signal Active";
+            statusText.style.color = "green";
+        };
+
+        ws.onmessage = function(event) {
+            // FastAPI sends raw Base64 string
+            img.src = "data:image/jpeg;base64," + event.data;
+        };
+
+        ws.onclose = function() {
+            statusText.textContent = "Signal Lost. Check Server.";
+            statusText.style.color = "red";
+        };
+    </script>
+</body>
+</html>

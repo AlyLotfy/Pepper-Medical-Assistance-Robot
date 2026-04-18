@@ -5,13 +5,15 @@
 import os
 import json
 import time
+import tempfile
 import requests
 import csv
 from faster_whisper import WhisperModel
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, session, make_response, Response
 from flask_sqlalchemy import SQLAlchemy
-from datetime import time, datetime
+from datetime import time, datetime, date as date_type
+from werkzeug.security import generate_password_hash, check_password_hash
 from rag_engine import RAGEngine
 from emotion_detector import EmotionDetector
 import sys
@@ -21,6 +23,13 @@ from ai_modules.medical_ner import MedicalNER
 from ai_modules.symptom_checker import SymptomChecker
 from ai_modules.face_auth import FaceAuth
 from ai_modules.conversation_memory import ConversationMemory
+from ai_modules.fall_detection import FallDetector
+from ai_modules.vital_tracker import check_vital_alerts, summarize_vitals, VitalAnalyzer
+from ai_modules.drug_checker import DrugChecker
+from ai_modules.medication_reminder import MedicationReminderManager
+from ai_modules.translator import Translator
+from ai_modules.wait_estimator import WaitEstimator
+from ai_modules.symptom_progression import SymptomProgressionTracker
 
 # ====== Load .env file ======
 def _load_env():
@@ -85,6 +94,27 @@ print("[INFO] Loading Whisper Model (this may take a moment)...")
 audio_model = WhisperModel("base", device="cpu", compute_type="int8")
 print("[INFO] Whisper Model Loaded (faster-whisper, int8 quantized).")
 
+SERVER_START_TIME = time.time()
+
+# ====== Session Logger ======
+try:
+    from session_logger import log_event as _log_event
+    _SESSION_LOGGING = True
+except ImportError:
+    _SESSION_LOGGING = False
+
+def _slog(action, patient_name=None, patient_id=None, success=True,
+          duration_ms=None, **details):
+    """Thin wrapper — logs a session event; never raises."""
+    if not _SESSION_LOGGING:
+        return
+    try:
+        _log_event(action, patient_name=patient_name, patient_id=patient_id,
+                   success=success, duration_ms=duration_ms, details=details or {},
+                   error=details.pop("error", None))
+    except Exception:
+        pass
+
 # ====== Initialize FAISS RAG Engine ======
 print("[INFO] Initializing FAISS RAG Engine...")
 rag_engine = RAGEngine(auto_load=True)
@@ -104,7 +134,13 @@ medical_ner        = MedicalNER()
 symptom_checker    = SymptomChecker()
 face_auth          = FaceAuth()
 print(f"[INFO] Face Auth status: {face_auth.status()}")
-# ConversationMemory is initialized after DB is set up (needs db + model)
+fall_detector      = FallDetector()
+translator         = Translator()
+vital_analyzer     = VitalAnalyzer()
+print(f"[INFO] Fall Detector ready: {fall_detector.status()}")
+print(f"[INFO] Translator ready: {translator.status()}")
+# ConversationMemory, DrugChecker, MedicationReminderManager, WaitEstimator,
+# SymptomProgressionTracker are instantiated per-request (they need db + models)
 
 # ====== Database Config ======
 app.config["JSON_SORT_KEYS"] = False
@@ -135,6 +171,7 @@ class Schedule(db.Model):
 class Appointment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctor.id'), nullable=False)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=True)
     patient_name = db.Column(db.String(100), nullable=False)
     appointment_date = db.Column(db.Date, nullable=False)
     time_slot = db.Column(db.Time, nullable=False)
@@ -203,12 +240,328 @@ class PatientMemory(db.Model):
     session_count = db.Column(db.Integer, default=0)
     updated_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
+# ── NEW MODELS ────────────────────────────────────────────────────────────────
+
+class Medication(db.Model):
+    """Drug catalog — ~80 common hospital medications seeded at startup."""
+    __tablename__ = 'medication'
+    id                  = db.Column(db.Integer, primary_key=True)
+    name                = db.Column(db.String(100), nullable=False, unique=True)
+    generic_name        = db.Column(db.String(100), nullable=True)
+    category            = db.Column(db.String(100), nullable=True)
+    dosage_forms        = db.Column(db.String(200), nullable=True)
+    common_side_effects = db.Column(db.Text,        nullable=True)
+    contraindications   = db.Column(db.Text,        nullable=True)
+    pregnancy_category  = db.Column(db.String(5),   nullable=True)   # A/B/C/D/X
+    requires_monitoring = db.Column(db.Boolean,     default=False)
+    notes               = db.Column(db.Text,        nullable=True)
+
+class DrugInteraction(db.Model):
+    """Known drug-drug interaction pairs (~130 entries seeded at startup)."""
+    __tablename__ = 'drug_interaction'
+    id             = db.Column(db.Integer, primary_key=True)
+    drug_a         = db.Column(db.String(100), nullable=False)
+    drug_b         = db.Column(db.String(100), nullable=False)
+    severity       = db.Column(db.String(20),  nullable=False)  # mild/moderate/severe/contraindicated
+    description    = db.Column(db.Text,        nullable=False)
+    recommendation = db.Column(db.Text,        nullable=True)
+    mechanism      = db.Column(db.String(300), nullable=True)
+
+class MedicationReminder(db.Model):
+    """Scheduled medication reminders per patient."""
+    __tablename__ = 'medication_reminder'
+    id              = db.Column(db.Integer, primary_key=True)
+    patient_id      = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=False)
+    medication_name = db.Column(db.String(100), nullable=False)
+    dosage          = db.Column(db.String(50),  nullable=True)
+    frequency       = db.Column(db.String(50),  nullable=True)
+    times           = db.Column(db.String(200), nullable=True)  # JSON ["08:00","20:00"]
+    active          = db.Column(db.Boolean,     default=True)
+    start_date      = db.Column(db.Date,        nullable=True)
+    end_date        = db.Column(db.Date,        nullable=True)
+    notes           = db.Column(db.Text,        nullable=True)
+    created_at      = db.Column(db.DateTime,    default=datetime.utcnow)
+
+class VitalRecord(db.Model):
+    """Patient vital signs history."""
+    __tablename__ = 'vital_record'
+    id               = db.Column(db.Integer, primary_key=True)
+    patient_id       = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=False)
+    recorded_at      = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    recorded_by      = db.Column(db.String(50), nullable=True)    # "patient"|"nurse"|"robot"
+    pain_scale       = db.Column(db.Integer,  nullable=True)       # 0–10
+    temperature      = db.Column(db.Float,    nullable=True)       # °C
+    systolic_bp      = db.Column(db.Integer,  nullable=True)       # mmHg
+    diastolic_bp     = db.Column(db.Integer,  nullable=True)       # mmHg
+    heart_rate       = db.Column(db.Integer,  nullable=True)       # bpm
+    oxygen_sat       = db.Column(db.Float,    nullable=True)       # %
+    respiratory_rate = db.Column(db.Integer,  nullable=True)       # br/min
+    blood_glucose    = db.Column(db.Float,    nullable=True)       # mmol/L
+    weight_kg        = db.Column(db.Float,    nullable=True)
+    height_cm        = db.Column(db.Float,    nullable=True)
+    notes            = db.Column(db.Text,     nullable=True)
+    alerts           = db.Column(db.Text,     nullable=True)       # JSON list of alert strings
+
+    def to_dict(self):
+        return {
+            "id": self.id, "patient_id": self.patient_id,
+            "recorded_at": self.recorded_at.strftime("%Y-%m-%d %H:%M"),
+            "recorded_by": self.recorded_by,
+            "pain_scale": self.pain_scale, "temperature": self.temperature,
+            "systolic_bp": self.systolic_bp, "diastolic_bp": self.diastolic_bp,
+            "heart_rate": self.heart_rate, "oxygen_sat": self.oxygen_sat,
+            "respiratory_rate": self.respiratory_rate, "blood_glucose": self.blood_glucose,
+            "weight_kg": self.weight_kg, "height_cm": self.height_cm,
+            "notes": self.notes,
+            "alerts": json.loads(self.alerts) if self.alerts else [],
+        }
+
+class TriageHistory(db.Model):
+    """Full triage session records per patient."""
+    __tablename__ = 'triage_history'
+    id                  = db.Column(db.Integer, primary_key=True)
+    patient_id          = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=True)
+    patient_name        = db.Column(db.String(100), nullable=True)
+    assessed_at         = db.Column(db.DateTime,    default=datetime.utcnow)
+    chief_complaint     = db.Column(db.String(300), nullable=True)
+    severity            = db.Column(db.Integer,     nullable=True)   # 1–5
+    severity_label      = db.Column(db.String(50),  nullable=True)
+    symptoms_json       = db.Column(db.Text,        nullable=True)   # JSON list
+    vitals_json         = db.Column(db.Text,        nullable=True)   # JSON dict
+    ai_recommendation   = db.Column(db.Text,        nullable=True)
+    department_referred = db.Column(db.String(100), nullable=True)
+    disposition         = db.Column(db.String(100), nullable=True)   # admitted/discharged/referred
+
+class SymptomHistory(db.Model):
+    """Symptom tracking over time per patient."""
+    __tablename__ = 'symptom_history'
+    id          = db.Column(db.Integer, primary_key=True)
+    patient_id  = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=False)
+    recorded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    symptoms    = db.Column(db.Text,     nullable=False)   # JSON list
+    severity    = db.Column(db.String(20), nullable=True)  # mild/moderate/severe
+    ner_results = db.Column(db.Text,     nullable=True)    # JSON from MedicalNER
+    context     = db.Column(db.Text,     nullable=True)    # free-text description
+    source      = db.Column(db.String(50), nullable=True)  # voice/chat/triage/manual
+
 # ===============================
 # DATABASE SETUP
 # ===============================
 def setup_database(app):
     with app.app_context():
         db.create_all()
+
+        # Add patient_id column to appointment table if it doesn't exist (SQLite migration)
+        from sqlalchemy import text as _text
+        with db.engine.connect() as _conn:
+            try:
+                _conn.execute(_text(
+                    "ALTER TABLE appointment ADD COLUMN patient_id INTEGER REFERENCES patient(id)"
+                ))
+                _conn.commit()
+                print("[DB] Added patient_id column to appointment table.")
+            except Exception:
+                pass  # Column already exists
+
+        # ── Seed Drug Catalog ──────────────────────────────────────────────────
+        if Medication.query.count() == 0:
+            print("[DB] Seeding drug catalog...")
+            _DRUGS = [
+                # ── Anticoagulants / Antiplatelets ──────────────────────────────
+                {"name":"warfarin","generic_name":"Warfarin sodium","category":"Anticoagulant","dosage_forms":"Tablet","common_side_effects":"Bleeding, bruising, nausea, hair loss","contraindications":"Active bleeding, pregnancy (1st/3rd trimester), hemorrhagic stroke","pregnancy_category":"X","requires_monitoring":True,"notes":"Requires regular INR monitoring. Many drug and food interactions (especially vitamin K foods)."},
+                {"name":"clopidogrel","generic_name":"Clopidogrel bisulfate","category":"Antiplatelet","dosage_forms":"Tablet","common_side_effects":"Bleeding, bruising, GI upset, rash","contraindications":"Active bleeding, peptic ulcer","pregnancy_category":"B","requires_monitoring":False,"notes":"Do not stop abruptly after stent placement. Avoid omeprazole (reduces efficacy)."},
+                {"name":"aspirin","generic_name":"Acetylsalicylic acid","category":"Antiplatelet/NSAID","dosage_forms":"Tablet, enteric-coated tablet","common_side_effects":"GI upset, bleeding, tinnitus (high dose)","contraindications":"Active GI bleeding, age <16 (Reye's syndrome), severe renal impairment","pregnancy_category":"C","requires_monitoring":False,"notes":"Low-dose (75–100mg) for cardioprotection. High-dose analgesic/antipyretic."},
+                {"name":"apixaban","generic_name":"Apixaban","category":"Anticoagulant (NOAC)","dosage_forms":"Tablet","common_side_effects":"Bleeding, bruising, nausea","contraindications":"Active bleeding, severe hepatic impairment, prosthetic heart valves","pregnancy_category":"C","requires_monitoring":False,"notes":"No routine INR monitoring needed. Twice daily dosing for AF/DVT."},
+                {"name":"rivaroxaban","generic_name":"Rivaroxaban","category":"Anticoagulant (NOAC)","dosage_forms":"Tablet","common_side_effects":"Bleeding, nausea, abdominal pain","contraindications":"Active bleeding, severe hepatic impairment","pregnancy_category":"C","requires_monitoring":False,"notes":"Once daily with evening meal. Use with caution with strong CYP3A4 inhibitors."},
+                {"name":"enoxaparin","generic_name":"Enoxaparin sodium","category":"LMWH Anticoagulant","dosage_forms":"Injection (subcutaneous)","common_side_effects":"Injection site bruising, bleeding, heparin-induced thrombocytopenia (rare)","contraindications":"Active major bleeding, thrombocytopenia with positive HIT antibody","pregnancy_category":"B","requires_monitoring":True,"notes":"Monitor anti-Xa levels in renal impairment or extreme weight. Renal dose adjustment required."},
+                # ── Antihypertensives ────────────────────────────────────────────
+                {"name":"amlodipine","generic_name":"Amlodipine besylate","category":"Calcium Channel Blocker","dosage_forms":"Tablet","common_side_effects":"Ankle oedema, flushing, headache, palpitations","contraindications":"Cardiogenic shock, unstable angina (some formulations)","pregnancy_category":"C","requires_monitoring":False,"notes":"Once daily. Oedema is common — not a sign of fluid retention."},
+                {"name":"metoprolol","generic_name":"Metoprolol tartrate/succinate","category":"Beta Blocker","dosage_forms":"Tablet, extended-release tablet, IV","common_side_effects":"Fatigue, bradycardia, cold extremities, depression, wheezing","contraindications":"Severe bradycardia, 2nd/3rd degree heart block, uncontrolled heart failure, asthma","pregnancy_category":"C","requires_monitoring":False,"notes":"Do not stop abruptly. Succinate (XL) is once daily."},
+                {"name":"bisoprolol","generic_name":"Bisoprolol fumarate","category":"Beta Blocker","dosage_forms":"Tablet","common_side_effects":"Fatigue, bradycardia, cold extremities, dizziness","contraindications":"Severe bradycardia, cardiogenic shock, uncontrolled asthma","pregnancy_category":"C","requires_monitoring":False,"notes":"Highly cardioselective. Preferred beta blocker in heart failure. Once daily."},
+                {"name":"atenolol","generic_name":"Atenolol","category":"Beta Blocker","dosage_forms":"Tablet","common_side_effects":"Fatigue, bradycardia, cold extremities","contraindications":"Bradycardia, heart block, asthma","pregnancy_category":"D","requires_monitoring":False,"notes":"Renal dose adjustment required. Less lipophilic than metoprolol — fewer CNS effects."},
+                {"name":"lisinopril","generic_name":"Lisinopril","category":"ACE Inhibitor","dosage_forms":"Tablet","common_side_effects":"Dry cough (10–15%), hyperkalaemia, dizziness, angioedema (rare)","contraindications":"History of angioedema, bilateral renal artery stenosis, pregnancy","pregnancy_category":"D","requires_monitoring":True,"notes":"Monitor K+ and creatinine. Once daily. Cough → switch to ARB."},
+                {"name":"ramipril","generic_name":"Ramipril","category":"ACE Inhibitor","dosage_forms":"Capsule, tablet","common_side_effects":"Dry cough, hyperkalaemia, dizziness, renal impairment","contraindications":"History of angioedema, pregnancy, bilateral RAS","pregnancy_category":"D","requires_monitoring":True,"notes":"Renal and K+ monitoring required. Strong evidence in post-MI and heart failure."},
+                {"name":"enalapril","generic_name":"Enalapril maleate","category":"ACE Inhibitor","dosage_forms":"Tablet, IV","common_side_effects":"Dry cough, hyperkalaemia, hypotension","contraindications":"Angioedema history, pregnancy","pregnancy_category":"D","requires_monitoring":True,"notes":"Prodrug — converted to enalaprilat in liver. Twice daily dosing."},
+                {"name":"losartan","generic_name":"Losartan potassium","category":"ARB","dosage_forms":"Tablet","common_side_effects":"Dizziness, hyperkalaemia, renal impairment","contraindications":"Pregnancy, bilateral renal artery stenosis","pregnancy_category":"D","requires_monitoring":True,"notes":"No cough compared to ACEi. Also reduces uric acid — beneficial in gout. Once daily."},
+                {"name":"valsartan","generic_name":"Valsartan","category":"ARB","dosage_forms":"Tablet","common_side_effects":"Dizziness, hyperkalaemia, fatigue","contraindications":"Pregnancy, liver disease","pregnancy_category":"D","requires_monitoring":True,"notes":"Once or twice daily. Combined with sacubitril for heart failure (Entresto)."},
+                {"name":"hydrochlorothiazide","generic_name":"Hydrochlorothiazide","category":"Thiazide Diuretic","dosage_forms":"Tablet","common_side_effects":"Hypokalaemia, hyponatraemia, hyperuricaemia, glucose intolerance","contraindications":"Anuria, sulfonamide allergy","pregnancy_category":"B","requires_monitoring":True,"notes":"Monitor electrolytes. May worsen gout. Often combined with ACEi or ARB."},
+                {"name":"furosemide","generic_name":"Furosemide","category":"Loop Diuretic","dosage_forms":"Tablet, IV, IM","common_side_effects":"Hypokalaemia, dehydration, ototoxicity (IV rapid infusion), hyperuricaemia","contraindications":"Anuria, severe hypovolaemia","pregnancy_category":"C","requires_monitoring":True,"notes":"Potent diuretic. Monitor K+, Na+, creatinine. Give in morning to avoid nocturia."},
+                {"name":"spironolactone","generic_name":"Spironolactone","category":"Potassium-sparing Diuretic / Aldosterone Antagonist","dosage_forms":"Tablet","common_side_effects":"Hyperkalaemia, gynaecomastia (men), menstrual irregularities, renal impairment","contraindications":"Hyperkalaemia, Addison's disease, concurrent K+ supplements with ACEi","pregnancy_category":"C","requires_monitoring":True,"notes":"Monitor K+ and renal function closely. Used in heart failure, hypertension, ascites."},
+                {"name":"amiodarone","generic_name":"Amiodarone hydrochloride","category":"Antiarrhythmic","dosage_forms":"Tablet, IV","common_side_effects":"Thyroid dysfunction, photosensitivity, pulmonary toxicity, corneal microdeposits, liver toxicity","contraindications":"Iodine allergy, thyroid disorders, 2nd/3rd degree AV block","pregnancy_category":"D","requires_monitoring":True,"notes":"Many serious drug interactions (warfarin, digoxin, statins). Annual TFT, LFT, CXR required."},
+                {"name":"digoxin","generic_name":"Digoxin","category":"Cardiac Glycoside","dosage_forms":"Tablet, IV","common_side_effects":"Nausea, vomiting, visual disturbances (yellow vision), bradycardia, arrhythmias","contraindications":"Ventricular fibrillation, hypertrophic obstructive cardiomyopathy, WPW syndrome","pregnancy_category":"C","requires_monitoring":True,"notes":"Narrow therapeutic index. Monitor serum levels, K+. Many drug interactions."},
+                # ── Lipid-lowering ───────────────────────────────────────────────
+                {"name":"atorvastatin","generic_name":"Atorvastatin calcium","category":"Statin","dosage_forms":"Tablet","common_side_effects":"Myalgia, elevated liver enzymes, GI upset, headache","contraindications":"Active liver disease, pregnancy, breastfeeding","pregnancy_category":"X","requires_monitoring":True,"notes":"Take at any time of day (unlike other statins). Monitor CK if myalgia. Avoid grapefruit."},
+                {"name":"rosuvastatin","generic_name":"Rosuvastatin calcium","category":"Statin","dosage_forms":"Tablet","common_side_effects":"Myalgia, proteinuria (high dose), GI upset","contraindications":"Active liver disease, pregnancy, Asian patients (dose adjustment needed)","pregnancy_category":"X","requires_monitoring":True,"notes":"Most potent statin. Lower doses in Asian patients. Avoid grapefruit (less interaction than other statins)."},
+                {"name":"simvastatin","generic_name":"Simvastatin","category":"Statin","dosage_forms":"Tablet","common_side_effects":"Myalgia, rhabdomyolysis (rare, high dose), liver enzyme elevation","contraindications":"Active liver disease, pregnancy, concurrent strong CYP3A4 inhibitors","pregnancy_category":"X","requires_monitoring":True,"notes":"Take at night. 80mg dose associated with rhabdomyolysis — max 40mg routinely. Many interactions."},
+                # ── Antidiabetics ────────────────────────────────────────────────
+                {"name":"metformin","generic_name":"Metformin hydrochloride","category":"Biguanide Antidiabetic","dosage_forms":"Tablet, extended-release tablet","common_side_effects":"GI upset, nausea, metallic taste, lactic acidosis (rare)","contraindications":"eGFR <30, contrast dye procedures (hold 48h), severe liver disease, excessive alcohol","pregnancy_category":"B","requires_monitoring":True,"notes":"First-line T2DM. Take with food. Stop 48h before iodinated contrast."},
+                {"name":"glipizide","generic_name":"Glipizide","category":"Sulfonylurea Antidiabetic","dosage_forms":"Tablet","common_side_effects":"Hypoglycaemia, weight gain, nausea","contraindications":"T1DM, severe renal/hepatic impairment, pregnancy","pregnancy_category":"C","requires_monitoring":True,"notes":"Risk of hypoglycaemia especially if meal delayed. Take 30 min before meals."},
+                {"name":"glibenclamide","generic_name":"Glibenclamide (Glyburide)","category":"Sulfonylurea Antidiabetic","dosage_forms":"Tablet","common_side_effects":"Hypoglycaemia, weight gain","contraindications":"Severe renal impairment (accumulates), elderly patients (high hypo risk), pregnancy","pregnancy_category":"C","requires_monitoring":True,"notes":"Higher hypoglycaemia risk than glipizide. Avoid in elderly and renal impairment."},
+                {"name":"sitagliptin","generic_name":"Sitagliptin phosphate","category":"DPP-4 Inhibitor Antidiabetic","dosage_forms":"Tablet","common_side_effects":"Nasopharyngitis, headache, pancreatitis (rare)","contraindications":"Severe renal impairment (dose adjust), pancreatitis history","pregnancy_category":"B","requires_monitoring":False,"notes":"Weight-neutral. Renal dose adjustment required. Once daily."},
+                {"name":"dapagliflozin","generic_name":"Dapagliflozin","category":"SGLT2 Inhibitor Antidiabetic","dosage_forms":"Tablet","common_side_effects":"UTI, genital mycotic infections, DKA (rare), Fournier's gangrene (rare)","contraindications":"eGFR <45 (limited efficacy), T1DM (DKA risk), recurrent UTIs","pregnancy_category":"C","requires_monitoring":True,"notes":"Also reduces CV events and progression of HF and CKD. Hold before surgery."},
+                {"name":"insulin glargine","generic_name":"Insulin glargine","category":"Long-acting Insulin","dosage_forms":"Injection (subcutaneous)","common_side_effects":"Hypoglycaemia, injection site reactions, weight gain","contraindications":"Hypoglycaemia","pregnancy_category":"C","requires_monitoring":True,"notes":"Once daily at same time. Do not mix with other insulins. Clear — not cloudy."},
+                {"name":"insulin aspart","generic_name":"Insulin aspart","category":"Rapid-acting Insulin","dosage_forms":"Injection (subcutaneous, IV)","common_side_effects":"Hypoglycaemia, injection site reactions","contraindications":"Hypoglycaemia","pregnancy_category":"B","requires_monitoring":True,"notes":"Give immediately before meals (or after if uncertain about carb intake). Rapid onset 10–20 min."},
+                # ── Antibiotics ──────────────────────────────────────────────────
+                {"name":"amoxicillin","generic_name":"Amoxicillin trihydrate","category":"Penicillin Antibiotic","dosage_forms":"Capsule, tablet, oral suspension, IV","common_side_effects":"Diarrhoea, rash, nausea, hypersensitivity","contraindications":"Penicillin allergy, mononucleosis (causes rash)","pregnancy_category":"B","requires_monitoring":False,"notes":"Broad-spectrum penicillin. If penicillin allergy → use clarithromycin or doxycycline."},
+                {"name":"amoxicillin-clavulanate","generic_name":"Amoxicillin-clavulanic acid","category":"Penicillin + Beta-lactamase Inhibitor","dosage_forms":"Tablet, oral suspension, IV","common_side_effects":"Diarrhoea, nausea, liver enzyme elevation, rash","contraindications":"Penicillin allergy, hepatic dysfunction from prior amoxicillin-clavulanate use","pregnancy_category":"B","requires_monitoring":False,"notes":"Covers more organisms than amoxicillin alone. Monitor LFTs if prolonged use."},
+                {"name":"ciprofloxacin","generic_name":"Ciprofloxacin hydrochloride","category":"Fluoroquinolone Antibiotic","dosage_forms":"Tablet, IV, eye/ear drops","common_side_effects":"Nausea, diarrhoea, tendinopathy/rupture, QT prolongation, CNS effects, photosensitivity","contraindications":"History of tendon problems with fluoroquinolones, myasthenia gravis, concurrent QT-prolonging drugs","pregnancy_category":"C","requires_monitoring":False,"notes":"Avoid in children/adolescents. Avoid with antacids. Risk of tendon rupture (especially Achilles, in elderly/steroids)."},
+                {"name":"levofloxacin","generic_name":"Levofloxacin","category":"Fluoroquinolone Antibiotic","dosage_forms":"Tablet, IV","common_side_effects":"Nausea, insomnia, QT prolongation, tendinopathy, photosensitivity","contraindications":"Fluoroquinolone hypersensitivity, QT prolongation, myasthenia gravis","pregnancy_category":"C","requires_monitoring":False,"notes":"Respiratory fluoroquinolone. Good atypical coverage. Same tendon rupture warnings as ciprofloxacin."},
+                {"name":"azithromycin","generic_name":"Azithromycin dihydrate","category":"Macrolide Antibiotic","dosage_forms":"Tablet, oral suspension, IV","common_side_effects":"GI upset, abdominal cramps, QT prolongation (rare), liver enzyme elevation","contraindications":"Hepatic impairment (use with caution), prior QT prolongation, macrolide allergy","pregnancy_category":"B","requires_monitoring":False,"notes":"Long tissue half-life — 3–5 day courses suffice. Many drug interactions via CYP3A4."},
+                {"name":"clarithromycin","generic_name":"Clarithromycin","category":"Macrolide Antibiotic","dosage_forms":"Tablet, extended-release, IV","common_side_effects":"GI upset, metallic taste, QT prolongation, liver enzyme elevation","contraindications":"QT prolongation, concurrent drugs metabolised by CYP3A4 (statins, etc.), macrolide allergy","pregnancy_category":"C","requires_monitoring":False,"notes":"Strong CYP3A4 inhibitor — many interactions. Avoid simvastatin/lovastatin (rhabdomyolysis risk)."},
+                {"name":"doxycycline","generic_name":"Doxycycline hyclate/monohydrate","category":"Tetracycline Antibiotic","dosage_forms":"Tablet, capsule, IV","common_side_effects":"Oesophageal irritation, photosensitivity, nausea, tooth discolouration (children)","contraindications":"Children <8 years, pregnancy (2nd/3rd trimester), breastfeeding","pregnancy_category":"D","requires_monitoring":False,"notes":"Take upright with water, do not lie down for 30 min. Avoid antacids/dairy within 2h."},
+                {"name":"metronidazole","generic_name":"Metronidazole","category":"Nitroimidazole Antibiotic/Antiprotozoal","dosage_forms":"Tablet, IV, topical, vaginal gel","common_side_effects":"Metallic taste, nausea, disulfiram-like reaction with alcohol, peripheral neuropathy (prolonged)","contraindications":"First trimester of pregnancy, concurrent alcohol, disulfiram use","pregnancy_category":"B","requires_monitoring":False,"notes":"Avoid alcohol during and 48h after treatment (severe flushing/vomiting)."},
+                {"name":"vancomycin","generic_name":"Vancomycin hydrochloride","category":"Glycopeptide Antibiotic","dosage_forms":"IV, oral (C.diff only)","common_side_effects":"Nephrotoxicity, ototoxicity, Red Man Syndrome (too rapid IV infusion), phlebitis","contraindications":"IV in hearing loss patients without monitoring","pregnancy_category":"C","requires_monitoring":True,"notes":"Infuse over ≥60 min to prevent Red Man Syndrome. Monitor trough levels, renal function."},
+                {"name":"trimethoprim-sulfamethoxazole","generic_name":"Co-trimoxazole","category":"Sulfonamide + Dihydrofolate Reductase Inhibitor Antibiotic","dosage_forms":"Tablet, IV","common_side_effects":"Rash (including Stevens-Johnson), hyperkalaemia, nausea, bone marrow suppression","contraindications":"Sulfonamide allergy, severe renal/hepatic impairment, G6PD deficiency, pregnancy (near term)","pregnancy_category":"C","requires_monitoring":True,"notes":"Contains sulfonamide — check allergy. Increases warfarin effect and methotrexate toxicity."},
+                # ── Pain / Anti-inflammatory ──────────────────────────────────────
+                {"name":"paracetamol","generic_name":"Paracetamol (Acetaminophen)","category":"Non-opioid Analgesic/Antipyretic","dosage_forms":"Tablet, capsule, oral solution, IV, suppository","common_side_effects":"Liver toxicity (overdose), rash (rare)","contraindications":"Severe hepatic impairment, paracetamol hypersensitivity","pregnancy_category":"B","requires_monitoring":False,"notes":"Safest analgesic in pregnancy. Max 4g/day in adults (2g in liver disease/heavy alcohol use)."},
+                {"name":"ibuprofen","generic_name":"Ibuprofen","category":"NSAID","dosage_forms":"Tablet, capsule, oral suspension, topical gel","common_side_effects":"GI upset, GI bleeding, fluid retention, renal impairment, increased CV risk","contraindications":"Active GI bleeding, severe renal impairment, aspirin-exacerbated asthma, 3rd trimester pregnancy","pregnancy_category":"C","requires_monitoring":False,"notes":"Take with food. Avoid in elderly, renal disease, heart failure. Reduces aspirin cardioprotection."},
+                {"name":"naproxen","generic_name":"Naproxen sodium","category":"NSAID","dosage_forms":"Tablet","common_side_effects":"GI upset, GI bleeding, fluid retention, renal impairment","contraindications":"Active GI bleeding, severe renal impairment, heart failure, 3rd trimester pregnancy","pregnancy_category":"C","requires_monitoring":False,"notes":"Longer-acting than ibuprofen (twice daily). Lower CV risk among NSAIDs."},
+                {"name":"diclofenac","generic_name":"Diclofenac sodium","category":"NSAID","dosage_forms":"Tablet, injection, topical gel, suppository","common_side_effects":"GI upset, liver enzyme elevation, fluid retention, CV events","contraindications":"Active GI bleeding, severe renal/hepatic impairment, heart failure, pregnancy (3rd trimester)","pregnancy_category":"C","requires_monitoring":True,"notes":"Higher CV risk than other NSAIDs. Monitor LFTs with prolonged use."},
+                {"name":"tramadol","generic_name":"Tramadol hydrochloride","category":"Weak Opioid Analgesic","dosage_forms":"Tablet, capsule, SR tablet, injection","common_side_effects":"Nausea, vomiting, dizziness, constipation, seizures, serotonin syndrome risk","contraindications":"MAOI use, uncontrolled epilepsy, severe hepatic impairment","pregnancy_category":"C","requires_monitoring":False,"notes":"Lowers seizure threshold. Serotonin syndrome risk with SSRIs/SNRIs. Avoid in poor CYP2D6 metabolisers."},
+                {"name":"codeine","generic_name":"Codeine phosphate","category":"Opioid Analgesic/Antitussive","dosage_forms":"Tablet, oral solution, IV","common_side_effects":"Constipation, sedation, nausea, respiratory depression","contraindications":"Children <12 (post-tonsillectomy), ultra-rapid CYP2D6 metabolisers, breastfeeding, severe respiratory disease","pregnancy_category":"C","requires_monitoring":False,"notes":"Prodrug — requires CYP2D6. ~10% of patients don't respond. Addictive potential."},
+                {"name":"morphine","generic_name":"Morphine sulphate","category":"Strong Opioid Analgesic","dosage_forms":"Tablet, SR tablet, oral solution, injection","common_side_effects":"Constipation, nausea, sedation, respiratory depression, hypotension","contraindications":"Severe respiratory depression, head injury (raises ICP), paralytic ileus","pregnancy_category":"C","requires_monitoring":True,"notes":"Strong opioid — use with caution. Start low. Regular laxatives required."},
+                {"name":"pregabalin","generic_name":"Pregabalin","category":"Anticonvulsant/Neuropathic Pain","dosage_forms":"Capsule, oral solution","common_side_effects":"Dizziness, somnolence, weight gain, peripheral oedema, visual disturbance","contraindications":"Hypersensitivity, rare hereditary galactose intolerance","pregnancy_category":"C","requires_monitoring":False,"notes":"Dose adjust in renal impairment. Misuse potential. Gradual taper on stopping."},
+                {"name":"gabapentin","generic_name":"Gabapentin","category":"Anticonvulsant/Neuropathic Pain","dosage_forms":"Capsule, tablet, oral solution","common_side_effects":"Dizziness, somnolence, ataxia, weight gain","contraindications":"Hypersensitivity","pregnancy_category":"C","requires_monitoring":False,"notes":"Renal dose adjustment required. Do not stop abruptly. Misuse/abuse potential."},
+                # ── Gastrointestinal ──────────────────────────────────────────────
+                {"name":"omeprazole","generic_name":"Omeprazole","category":"Proton Pump Inhibitor","dosage_forms":"Capsule, IV","common_side_effects":"Headache, diarrhoea, hypomagnesaemia (long-term), C.diff risk, fracture risk (prolonged)","contraindications":"Hypersensitivity to PPI","pregnancy_category":"C","requires_monitoring":False,"notes":"30–60 min before meals. Interacts with clopidogrel (reduces efficacy) — use pantoprazole instead."},
+                {"name":"pantoprazole","generic_name":"Pantoprazole sodium","category":"Proton Pump Inhibitor","dosage_forms":"Tablet, IV","common_side_effects":"Headache, diarrhoea, hypomagnesaemia (long-term)","contraindications":"Hypersensitivity to PPI","pregnancy_category":"B","requires_monitoring":False,"notes":"Preferred PPI with clopidogrel (fewer CYP2C19 interactions). Take 30–60 min before meals."},
+                {"name":"esomeprazole","generic_name":"Esomeprazole magnesium","category":"Proton Pump Inhibitor","dosage_forms":"Capsule, IV","common_side_effects":"Headache, abdominal pain, diarrhoea","contraindications":"Hypersensitivity to PPI","pregnancy_category":"C","requires_monitoring":False,"notes":"S-enantiomer of omeprazole. Once daily before breakfast."},
+                {"name":"ondansetron","generic_name":"Ondansetron hydrochloride","category":"5-HT3 Antagonist Antiemetic","dosage_forms":"Tablet, oral dissolution, IV, IM","common_side_effects":"Headache, constipation, QT prolongation","contraindications":"Concurrent apomorphine, congenital QT syndrome","pregnancy_category":"B","requires_monitoring":False,"notes":"IV should be diluted and given slowly. Useful post-operative and chemo nausea."},
+                {"name":"metoclopramide","generic_name":"Metoclopramide hydrochloride","category":"Prokinetic Antiemetic","dosage_forms":"Tablet, IV, IM","common_side_effects":"Extrapyramidal effects (young/elderly), tardive dyskinesia (prolonged), sedation","contraindications":"GI obstruction/perforation, Parkinson's disease, phaeochromocytoma","pregnancy_category":"B","requires_monitoring":False,"notes":"Maximum 5 days. Avoid in Parkinson's (worsens symptoms). Extrapyramidal effects → stop immediately."},
+                # ── Respiratory ───────────────────────────────────────────────────
+                {"name":"salbutamol","generic_name":"Salbutamol sulphate (Albuterol)","category":"Short-acting Beta-2 Agonist Bronchodilator","dosage_forms":"Inhaler (MDI, nebuliser), IV, tablet","common_side_effects":"Tremor, tachycardia, hypokalaemia (high doses), headache","contraindications":"Hypersensitivity","pregnancy_category":"C","requires_monitoring":False,"notes":"Reliever inhaler — use for acute symptoms. If using >3x/week → step up preventer therapy."},
+                {"name":"tiotropium","generic_name":"Tiotropium bromide","category":"Long-acting Anticholinergic Bronchodilator","dosage_forms":"Inhaler (HandiHaler, Respimat)","common_side_effects":"Dry mouth, urinary retention, constipation, blurred vision","contraindications":"Hypersensitivity, narrow-angle glaucoma, urinary retention","pregnancy_category":"C","requires_monitoring":False,"notes":"Once daily. COPD controller. Do not use for acute bronchospasm."},
+                {"name":"fluticasone","generic_name":"Fluticasone propionate/furoate","category":"Inhaled Corticosteroid","dosage_forms":"Inhaler (MDI, DPI), nasal spray","common_side_effects":"Oral candidiasis, hoarseness, adrenal suppression (high doses)","contraindications":"Hypersensitivity, active pulmonary TB","pregnancy_category":"C","requires_monitoring":False,"notes":"Rinse mouth after use to prevent candidiasis. Preventive — not for acute attacks."},
+                {"name":"montelukast","generic_name":"Montelukast sodium","category":"Leukotriene Receptor Antagonist","dosage_forms":"Tablet, granules","common_side_effects":"Headache, GI upset, neuropsychiatric effects (mood changes, depression — FDA warning)","contraindications":"Hypersensitivity","pregnancy_category":"B","requires_monitoring":False,"notes":"Take in evening. Monitor for neuropsychiatric effects. Alternative to ICS in mild asthma."},
+                {"name":"theophylline","generic_name":"Theophylline","category":"Xanthine Bronchodilator","dosage_forms":"SR tablet, IV","common_side_effects":"Nausea, arrhythmias, seizures (toxicity), insomnia, tachycardia","contraindications":"Acute porphyria","pregnancy_category":"C","requires_monitoring":True,"notes":"Narrow therapeutic index. Monitor serum levels (target 10–20 mg/L). Many interactions (fluoroquinolones, macrolides)."},
+                # ── CNS / Psychiatry ──────────────────────────────────────────────
+                {"name":"sertraline","generic_name":"Sertraline hydrochloride","category":"SSRI Antidepressant","dosage_forms":"Tablet, oral concentrate","common_side_effects":"Nausea, diarrhoea, insomnia, sexual dysfunction, serotonin syndrome (overdose/combinations)","contraindications":"MAOI use (within 14 days), pimozide","pregnancy_category":"C","requires_monitoring":False,"notes":"Start low, titrate slowly. Takes 4–6 weeks for full effect. Do not stop abruptly."},
+                {"name":"fluoxetine","generic_name":"Fluoxetine hydrochloride","category":"SSRI Antidepressant","dosage_forms":"Capsule, tablet, liquid","common_side_effects":"Insomnia, anxiety, nausea, sexual dysfunction","contraindications":"MAOI use (within 14 days), thioridazine","pregnancy_category":"C","requires_monitoring":False,"notes":"Long half-life — less withdrawal syndrome. Strong CYP2D6 inhibitor — many drug interactions (codeine, tamoxifen)."},
+                {"name":"escitalopram","generic_name":"Escitalopram oxalate","category":"SSRI Antidepressant","dosage_forms":"Tablet, oral solution","common_side_effects":"Nausea, insomnia, sexual dysfunction, QT prolongation (high dose)","contraindications":"MAOI use, concurrent QT-prolonging drugs at high dose","pregnancy_category":"C","requires_monitoring":False,"notes":"Once daily. Well-tolerated. Maximum 20mg/day (10mg in elderly/hepatic impairment)."},
+                {"name":"venlafaxine","generic_name":"Venlafaxine hydrochloride","category":"SNRI Antidepressant","dosage_forms":"Tablet, SR capsule","common_side_effects":"Nausea, insomnia, hypertension (high dose), sweating, withdrawal syndrome","contraindications":"MAOI use, uncontrolled hypertension","pregnancy_category":"C","requires_monitoring":True,"notes":"Monitor BP especially at doses >150mg/day. Taper slowly to avoid withdrawal."},
+                {"name":"duloxetine","generic_name":"Duloxetine hydrochloride","category":"SNRI Antidepressant/Neuropathic Pain","dosage_forms":"Capsule","common_side_effects":"Nausea, dry mouth, constipation, hypertension, urinary retention","contraindications":"MAOI use, uncontrolled narrow-angle glaucoma, hepatic impairment","pregnancy_category":"C","requires_monitoring":False,"notes":"Also approved for neuropathic pain, fibromyalgia, stress incontinence."},
+                {"name":"amitriptyline","generic_name":"Amitriptyline hydrochloride","category":"Tricyclic Antidepressant","dosage_forms":"Tablet","common_side_effects":"Dry mouth, constipation, urinary retention, sedation, QT prolongation, weight gain","contraindications":"Recent MI, arrhythmia, MAOI use, closed-angle glaucoma","pregnancy_category":"C","requires_monitoring":False,"notes":"Low dose (10–25mg) for neuropathic pain/migraine prevention. Sedating — take at night."},
+                {"name":"diazepam","generic_name":"Diazepam","category":"Benzodiazepine","dosage_forms":"Tablet, oral solution, IV, rectal","common_side_effects":"Sedation, confusion, respiratory depression, dependence, amnesia","contraindications":"Respiratory failure, sleep apnoea, hepatic impairment, myasthenia gravis","pregnancy_category":"D","requires_monitoring":False,"notes":"Short-term use only (2–4 weeks max). Dependence risk. Active metabolite accumulates in elderly."},
+                {"name":"lorazepam","generic_name":"Lorazepam","category":"Benzodiazepine","dosage_forms":"Tablet, IV","common_side_effects":"Sedation, respiratory depression, dependence, amnesia","contraindications":"Respiratory failure, sleep apnoea, myasthenia gravis","pregnancy_category":"D","requires_monitoring":False,"notes":"No active metabolites — preferred in elderly and hepatic impairment. IV for status epilepticus."},
+                {"name":"haloperidol","generic_name":"Haloperidol","category":"Typical Antipsychotic","dosage_forms":"Tablet, oral solution, IV, IM, depot injection","common_side_effects":"Extrapyramidal effects, tardive dyskinesia, QT prolongation, sedation, hyperprolactinaemia","contraindications":"Parkinson's disease, Lewy body dementia, severe CNS depression","pregnancy_category":"C","requires_monitoring":True,"notes":"Monitor ECG for QT prolongation. Extrapyramidal side effects common — use antiparkinsonian drugs PRN."},
+                {"name":"olanzapine","generic_name":"Olanzapine","category":"Atypical Antipsychotic","dosage_forms":"Tablet, orodispersible tablet, IM","common_side_effects":"Weight gain, sedation, metabolic syndrome, hyperglycaemia, tardive dyskinesia","contraindications":"Hypersensitivity, narrow-angle glaucoma","pregnancy_category":"C","requires_monitoring":True,"notes":"Monitor weight, blood glucose, lipids. Significant metabolic side effects."},
+                {"name":"sodium valproate","generic_name":"Sodium valproate / Valproic acid","category":"Anticonvulsant/Mood Stabiliser","dosage_forms":"Tablet, SR tablet, IV, oral liquid","common_side_effects":"Weight gain, tremor, hair loss, liver toxicity, pancreatitis, teratogenicity","contraindications":"Pregnancy (severe teratogen), liver disease, urea cycle disorders","pregnancy_category":"D","requires_monitoring":True,"notes":"Highly teratogenic — Valproate Pregnancy Prevention Programme required. Monitor LFTs and levels."},
+                {"name":"carbamazepine","generic_name":"Carbamazepine","category":"Anticonvulsant/Mood Stabiliser","dosage_forms":"Tablet, SR tablet, oral liquid, suppository","common_side_effects":"Drowsiness, dizziness, ataxia, diplopia, hyponatraemia, Stevens-Johnson syndrome","contraindications":"AV block, bone marrow depression, MAOI use, Asian HLA-B*1502 genotype (SJS risk)","pregnancy_category":"D","requires_monitoring":True,"notes":"Strong enzyme inducer — many drug interactions. Monitor Na+ (SIADH), LFTs, FBC. Test HLA-B*1502 in Asian patients."},
+                {"name":"phenytoin","generic_name":"Phenytoin sodium","category":"Anticonvulsant","dosage_forms":"Capsule, injection, oral suspension","common_side_effects":"Nystagmus, ataxia, gingival hyperplasia, hirsutism, rash, osteoporosis","contraindications":"AV block, sinus bradycardia, sino-atrial block","pregnancy_category":"D","requires_monitoring":True,"notes":"Narrow therapeutic index. Saturable kinetics — small dose increases can cause toxicity. Monitor levels."},
+                {"name":"donepezil","generic_name":"Donepezil hydrochloride","category":"Acetylcholinesterase Inhibitor (Dementia)","dosage_forms":"Tablet, orodispersible tablet","common_side_effects":"Nausea, diarrhoea, insomnia, bradycardia, muscle cramps","contraindications":"Sick sinus syndrome, 2nd/3rd degree AV block, peptic ulcer disease (relative)","pregnancy_category":"C","requires_monitoring":False,"notes":"Start with 5mg at night. Can increase to 10mg after 4 weeks. Bradycardia risk — monitor pulse."},
+                {"name":"memantine","generic_name":"Memantine hydrochloride","category":"NMDA Receptor Antagonist (Dementia)","dosage_forms":"Tablet, oral solution","common_side_effects":"Dizziness, headache, constipation, confusion","contraindications":"Severe renal impairment (dose adjust)","pregnancy_category":"B","requires_monitoring":False,"notes":"Moderate-severe Alzheimer's. Renal dose adjustment. Can be combined with donepezil."},
+                # ── Thyroid ───────────────────────────────────────────────────────
+                {"name":"levothyroxine","generic_name":"Levothyroxine sodium","category":"Thyroid Hormone Replacement","dosage_forms":"Tablet","common_side_effects":"Symptoms of hyperthyroidism if overdosed (palpitations, weight loss, tremor)","contraindications":"Untreated adrenal insufficiency, thyrotoxicosis","pregnancy_category":"A","requires_monitoring":True,"notes":"Take on empty stomach, 30–60 min before breakfast. Avoid calcium, iron within 4h. Monitor TFTs every 6–12 months."},
+                {"name":"carbimazole","generic_name":"Carbimazole","category":"Antithyroid Drug","dosage_forms":"Tablet","common_side_effects":"Rash, agranulocytosis (rare but serious), arthralgia, hepatotoxicity","contraindications":"Breastfeeding (small amount in milk), previous carbimazole-induced agranulocytosis","pregnancy_category":"D","requires_monitoring":True,"notes":"If sore throat/fever → stop immediately and check FBC (agranulocytosis). Monitor TFTs."},
+                # ── Immunosuppressants / Disease-modifying ───────────────────────
+                {"name":"prednisolone","generic_name":"Prednisolone","category":"Corticosteroid","dosage_forms":"Tablet, oral solution, IV, topical","common_side_effects":"Hyperglycaemia, hypertension, osteoporosis, Cushing's syndrome, adrenal suppression, GI ulcers","contraindications":"Systemic infection (relative), live vaccines","pregnancy_category":"C","requires_monitoring":True,"notes":"Taper slowly if used >3 weeks. Prescribe bone protection (Ca/VitD, bisphosphonate). Monitor glucose in diabetics."},
+                {"name":"dexamethasone","generic_name":"Dexamethasone","category":"Corticosteroid","dosage_forms":"Tablet, IV, IM, eye drops","common_side_effects":"Hyperglycaemia, hypertension, fluid retention, adrenal suppression","contraindications":"Systemic infection (relative)","pregnancy_category":"C","requires_monitoring":True,"notes":"8x more potent than prednisolone. Used in cerebral oedema, COVID-19, anti-emesis."},
+                {"name":"hydroxychloroquine","generic_name":"Hydroxychloroquine sulphate","category":"Antimalarial/Disease-modifying Antirheumatic","dosage_forms":"Tablet","common_side_effects":"Retinal toxicity (long-term), GI upset, rash, QT prolongation","contraindications":"Retinal/visual field abnormalities, hypersensitivity, concurrent QT-prolonging drugs","pregnancy_category":"C","requires_monitoring":True,"notes":"Annual ophthalmology review. Max dose 5mg/kg/day (ideal body weight). QT monitoring."},
+                {"name":"methotrexate","generic_name":"Methotrexate","category":"Disease-modifying Antirheumatic/Antimetabolite","dosage_forms":"Tablet (weekly), injection","common_side_effects":"Hepatotoxicity, bone marrow suppression, oral ulcers, pneumonitis, teratogenicity","contraindications":"Pregnancy, breastfeeding, immunodeficiency, severe renal/hepatic impairment","pregnancy_category":"X","requires_monitoring":True,"notes":"Weekly dose (not daily!). Always co-prescribe folic acid. Monitor FBC, LFTs, creatinine monthly."},
+                {"name":"azathioprine","generic_name":"Azathioprine","category":"Immunosuppressant/DMARD","dosage_forms":"Tablet, IV","common_side_effects":"Bone marrow suppression, nausea, GI upset, hepatotoxicity, lymphoma risk (long-term)","contraindications":"Concurrent allopurinol (without dose reduction), hypersensitivity","pregnancy_category":"D","requires_monitoring":True,"notes":"Test TPMT enzyme activity before starting. Fatal interaction with allopurinol (xanthine oxidase inhibitor)."},
+                # ── Supplements / Minerals ────────────────────────────────────────
+                {"name":"folic acid","generic_name":"Folic acid","category":"Vitamin B9 Supplement","dosage_forms":"Tablet","common_side_effects":"Rare — GI upset at high doses","contraindications":"Vitamin B12 deficiency (can mask neurological symptoms)","pregnancy_category":"A","requires_monitoring":False,"notes":"5mg daily with methotrexate to reduce side effects. 400mcg pre-conception/1st trimester for neural tube prevention."},
+                {"name":"ferrous fumarate","generic_name":"Ferrous fumarate","category":"Iron Supplement","dosage_forms":"Tablet, oral solution","common_side_effects":"Constipation, nausea, dark stools, abdominal pain","contraindications":"Iron overload disorders, haemolytic anaemia without iron deficiency","pregnancy_category":"A","requires_monitoring":True,"notes":"Take on empty stomach for best absorption. Space 2h from levothyroxine, antacids, dairy."},
+                {"name":"calcium carbonate","generic_name":"Calcium carbonate","category":"Calcium Supplement / Antacid","dosage_forms":"Tablet, chewable tablet","common_side_effects":"Constipation, hypercalcaemia, kidney stones (high dose)","contraindications":"Hypercalcaemia, renal calculi","pregnancy_category":"A","requires_monitoring":False,"notes":"Take with meals (requires stomach acid for absorption). Space 2h from levothyroxine."},
+                {"name":"vitamin d","generic_name":"Cholecalciferol (Vitamin D3)","category":"Vitamin D Supplement","dosage_forms":"Tablet, capsule, drops, IM injection","common_side_effects":"Hypercalcaemia (high dose), nausea","contraindications":"Hypercalcaemia, vitamin D toxicity, sarcoidosis","pregnancy_category":"A","requires_monitoring":True,"notes":"Monitor 25-OH vitamin D and calcium levels. High-dose loading requires medical supervision."},
+            ]
+            db.session.add_all([Medication(**d) for d in _DRUGS])
+            db.session.commit()
+            print(f"[DB] Seeded {len(_DRUGS)} medications.")
+
+        # ── Seed Drug Interactions ────────────────────────────────────────────
+        if DrugInteraction.query.count() == 0:
+            print("[DB] Seeding drug interactions...")
+            _IX = [
+                # ── Warfarin interactions ─────────────────────────────────────
+                {"drug_a":"warfarin","drug_b":"aspirin","severity":"severe","description":"Combined use significantly increases haemorrhagic risk through additive anticoagulation and platelet inhibition.","recommendation":"Avoid unless clearly indicated (e.g., mechanical heart valve, recent ACS). If used together, monitor INR frequently and watch for bleeding signs.","mechanism":"Pharmacodynamic: additive anticoagulant + antiplatelet effects."},
+                {"drug_a":"warfarin","drug_b":"ibuprofen","severity":"severe","description":"NSAIDs displace warfarin from plasma proteins, inhibit platelet aggregation, and cause GI mucosal damage — markedly increasing bleeding risk.","recommendation":"Avoid combination. Use paracetamol for analgesia. If NSAID essential, use lowest dose for shortest duration with close INR monitoring.","mechanism":"Pharmacokinetic (protein displacement) + pharmacodynamic (GI toxicity, antiplatelet)."},
+                {"drug_a":"warfarin","drug_b":"naproxen","severity":"severe","description":"Same mechanism as warfarin+ibuprofen. Increased INR and GI haemorrhage risk.","recommendation":"Avoid. Use paracetamol instead.","mechanism":"Protein displacement + GI mucosal damage + antiplatelet effect."},
+                {"drug_a":"warfarin","drug_b":"diclofenac","severity":"severe","description":"Diclofenac enhances warfarin anticoagulation and increases GI bleeding risk.","recommendation":"Avoid. Monitor INR closely if unavoidable. Use PPI co-prescription.","mechanism":"CYP2C9 inhibition raises warfarin levels + GI mucosal toxicity."},
+                {"drug_a":"warfarin","drug_b":"metronidazole","severity":"severe","description":"Metronidazole inhibits CYP2C9, the main enzyme metabolising warfarin, causing 2-3x increase in INR.","recommendation":"Monitor INR closely when starting/stopping metronidazole. Consider dose reduction of warfarin.","mechanism":"CYP2C9 inhibition → decreased warfarin clearance → elevated INR."},
+                {"drug_a":"warfarin","drug_b":"ciprofloxacin","severity":"moderate","description":"Ciprofloxacin can increase warfarin effect by reducing gut flora that synthesise vitamin K.","recommendation":"Monitor INR more frequently when starting or stopping ciprofloxacin.","mechanism":"Gut flora reduction → decreased vitamin K synthesis + possible CYP1A2 interaction."},
+                {"drug_a":"warfarin","drug_b":"azithromycin","severity":"moderate","description":"Azithromycin can increase warfarin's anticoagulant effect.","recommendation":"Monitor INR within 3–5 days of starting azithromycin.","mechanism":"Not fully established; possible gut flora and CYP3A4 interaction."},
+                {"drug_a":"warfarin","drug_b":"clarithromycin","severity":"moderate","description":"Clarithromycin inhibits CYP3A4 and may increase warfarin levels.","recommendation":"Monitor INR closely when starting/stopping clarithromycin.","mechanism":"CYP3A4 inhibition → increased warfarin exposure."},
+                {"drug_a":"warfarin","drug_b":"amiodarone","severity":"severe","description":"Amiodarone inhibits CYP2C9 and CYP3A4, dramatically increasing warfarin levels. Can take weeks to manifest.","recommendation":"Reduce warfarin dose by 30–50% when starting amiodarone. Monitor INR weekly until stable.","mechanism":"CYP2C9/CYP3A4 inhibition → markedly increased warfarin plasma levels."},
+                {"drug_a":"warfarin","drug_b":"fluconazole","severity":"severe","description":"Fluconazole strongly inhibits CYP2C9 — marked increase in warfarin effect.","recommendation":"Monitor INR closely. Consider warfarin dose reduction. Short-term topical antifungals are safer.","mechanism":"Strong CYP2C9 inhibition → elevated warfarin levels."},
+                {"drug_a":"warfarin","drug_b":"sertraline","severity":"moderate","description":"SSRIs impair platelet function and may modestly increase INR.","recommendation":"Monitor INR on initiation and if dose changes.","mechanism":"Serotonin reuptake inhibition in platelets reduces haemostasis."},
+                {"drug_a":"warfarin","drug_b":"trimethoprim-sulfamethoxazole","severity":"severe","description":"TMP-SMX inhibits CYP2C9, significantly increasing warfarin levels and INR.","recommendation":"Monitor INR closely. Consider warfarin dose reduction.","mechanism":"CYP2C9 inhibition → reduced warfarin clearance."},
+                {"drug_a":"warfarin","drug_b":"omeprazole","severity":"mild","description":"Omeprazole may slightly increase warfarin effect via CYP2C19.","recommendation":"Monitor INR if starting or changing omeprazole. No dose change usually needed.","mechanism":"Weak CYP2C19 inhibition → minor increase in warfarin (S-enantiomer less affected)."},
+                {"drug_a":"warfarin","drug_b":"carbamazepine","severity":"moderate","description":"Carbamazepine is a strong CYP inducer that accelerates warfarin metabolism, reducing anticoagulation.","recommendation":"Monitor INR. May require warfarin dose increase. Monitor on drug initiation/cessation.","mechanism":"CYP2C9/CYP3A4 induction → increased warfarin clearance."},
+                {"drug_a":"warfarin","drug_b":"phenytoin","severity":"moderate","description":"Complex bidirectional interaction: initially phenytoin increases then decreases warfarin effect.","recommendation":"Monitor INR and phenytoin levels closely. Unpredictable interaction.","mechanism":"Phenytoin inhibits then induces CYP2C9. Also displaces warfarin from albumin."},
+                # ── Clopidogrel interactions ──────────────────────────────────
+                {"drug_a":"clopidogrel","drug_b":"omeprazole","severity":"moderate","description":"Omeprazole inhibits CYP2C19, reducing conversion of clopidogrel to its active form, potentially reducing antiplatelet efficacy.","recommendation":"Use pantoprazole instead of omeprazole with clopidogrel when a PPI is needed.","mechanism":"CYP2C19 inhibition → reduced clopidogrel bioactivation."},
+                {"drug_a":"clopidogrel","drug_b":"aspirin","severity":"moderate","description":"Dual antiplatelet therapy increases bleeding risk. However, this combination is clinically indicated post-ACS/stent.","recommendation":"Use only when clinically indicated (dual antiplatelet therapy post-stent). Review after 12 months.","mechanism":"Additive antiplatelet effects via different mechanisms."},
+                # ── NSAID combinations ────────────────────────────────────────
+                {"drug_a":"aspirin","drug_b":"ibuprofen","severity":"moderate","description":"Ibuprofen competes with aspirin for COX-1 binding, reducing aspirin's cardioprotective antiplatelet effect.","recommendation":"If both needed, take aspirin 30 min before ibuprofen. Consider alternative analgesic (paracetamol).","mechanism":"Competitive COX-1 binding — ibuprofen blocks aspirin's irreversible COX-1 acetylation."},
+                {"drug_a":"ibuprofen","drug_b":"lisinopril","severity":"moderate","description":"NSAIDs reduce renal prostaglandin synthesis, blunting ACE inhibitor antihypertensive effects and risking acute kidney injury.","recommendation":"Avoid NSAIDs in patients on ACE inhibitors. Use paracetamol for analgesia. Monitor BP and renal function.","mechanism":"NSAIDs reduce renal blood flow and tubular sodium excretion, opposing ACE inhibitor effects."},
+                {"drug_a":"ibuprofen","drug_b":"ramipril","severity":"moderate","description":"Same mechanism as ibuprofen + lisinopril.","recommendation":"Avoid. Use paracetamol. Monitor renal function if unavoidable.","mechanism":"Reduction of renal prostaglandins opposing ACE inhibitor natriuresis and vasodilatation."},
+                {"drug_a":"ibuprofen","drug_b":"losartan","severity":"moderate","description":"NSAIDs reduce efficacy of ARBs and increase risk of acute kidney injury.","recommendation":"Avoid. Use paracetamol. Monitor BP and renal function.","mechanism":"Reduced renal prostaglandins opposing ARB effects on tubular sodium handling."},
+                {"drug_a":"ibuprofen","drug_b":"furosemide","severity":"moderate","description":"NSAIDs reduce diuretic and antihypertensive effects of furosemide and increase renal toxicity risk.","recommendation":"Avoid. Monitor fluid status and renal function if unavoidable.","mechanism":"NSAIDs block prostaglandin-mediated natriuresis required for loop diuretic action."},
+                {"drug_a":"ibuprofen","drug_b":"prednisolone","severity":"moderate","description":"Concurrent NSAIDs and corticosteroids significantly increase GI ulceration and bleeding risk.","recommendation":"Avoid combination. If essential, add PPI co-prescription. Use paracetamol instead.","mechanism":"Additive GI mucosal damage: NSAIDs inhibit COX-1 (prostaglandins), steroids reduce mucosal repair."},
+                {"drug_a":"methotrexate","drug_b":"ibuprofen","severity":"severe","description":"NSAIDs reduce renal clearance of methotrexate, causing dangerous drug accumulation and toxicity.","recommendation":"Avoid all NSAIDs with methotrexate. Use paracetamol. If NSAID essential, reduce MTX dose and monitor closely.","mechanism":"NSAIDs reduce GFR and tubular secretion → methotrexate accumulation → bone marrow suppression, mucositis."},
+                {"drug_a":"methotrexate","drug_b":"naproxen","severity":"severe","description":"Same as methotrexate + ibuprofen — reduced MTX clearance → toxicity.","recommendation":"Avoid all NSAIDs with methotrexate.","mechanism":"Impaired renal clearance of methotrexate."},
+                {"drug_a":"methotrexate","drug_b":"trimethoprim-sulfamethoxazole","severity":"severe","description":"TMP-SMX and methotrexate both inhibit dihydrofolate reductase — severe additive bone marrow suppression.","recommendation":"Contraindicated. Use an alternative antibiotic (e.g., azithromycin).","mechanism":"Additive DHFR inhibition → folate depletion → bone marrow suppression."},
+                # ── ACE inhibitor interactions ─────────────────────────────────
+                {"drug_a":"lisinopril","drug_b":"spironolactone","severity":"moderate","description":"Both agents increase serum potassium. Combination can cause life-threatening hyperkalaemia.","recommendation":"Monitor serum potassium weekly when initiating. Avoid high-potassium foods. Beneficial in heart failure with careful monitoring.","mechanism":"ACE inhibition reduces aldosterone (reduces K+ excretion) + aldosterone antagonism → additive K+ retention."},
+                {"drug_a":"ramipril","drug_b":"spironolactone","severity":"moderate","description":"Same as lisinopril + spironolactone. Hyperkalaemia risk.","recommendation":"Monitor K+ closely. Use lowest effective doses.","mechanism":"Additive potassium retention."},
+                # ── Digoxin interactions ──────────────────────────────────────
+                {"drug_a":"digoxin","drug_b":"amiodarone","severity":"severe","description":"Amiodarone increases digoxin plasma levels by ~50–100% (inhibits P-glycoprotein), causing digoxin toxicity.","recommendation":"Reduce digoxin dose by 50% when adding amiodarone. Monitor digoxin levels and ECG.","mechanism":"P-glycoprotein inhibition + reduced renal clearance of digoxin."},
+                {"drug_a":"digoxin","drug_b":"verapamil","severity":"severe","description":"Verapamil increases digoxin levels and causes additive AV block and bradycardia.","recommendation":"Avoid combination. If used, reduce digoxin dose by 50% and monitor closely.","mechanism":"P-glycoprotein inhibition raises digoxin levels + additive AV nodal conduction slowing."},
+                {"drug_a":"digoxin","drug_b":"ciprofloxacin","severity":"moderate","description":"Ciprofloxacin can increase digoxin levels by altering gut flora that metabolise digoxin.","recommendation":"Monitor digoxin levels and signs of toxicity during and after ciprofloxacin course.","mechanism":"Reduction of Eggerthella lenta gut flora that inactivates digoxin."},
+                # ── Beta blocker interactions ──────────────────────────────────
+                {"drug_a":"metoprolol","drug_b":"verapamil","severity":"severe","description":"Additive negative chronotropic and inotropic effects can cause severe bradycardia, heart block, or asystole.","recommendation":"Avoid IV verapamil in patients on beta blockers. Oral combination requires close monitoring.","mechanism":"Additive AV node conduction slowing (beta-blockade + calcium channel blockade)."},
+                {"drug_a":"bisoprolol","drug_b":"verapamil","severity":"severe","description":"Same mechanism as metoprolol + verapamil. Severe bradycardia and heart block risk.","recommendation":"Avoid IV verapamil with oral beta blockers.","mechanism":"Additive negative chronotropic/dromotropic effects."},
+                # ── Statin interactions ────────────────────────────────────────
+                {"drug_a":"simvastatin","drug_b":"amiodarone","severity":"severe","description":"Amiodarone inhibits CYP3A4, causing simvastatin accumulation and high risk of myopathy/rhabdomyolysis.","recommendation":"Do not use simvastatin >20mg with amiodarone. Consider switching to rosuvastatin or pravastatin (not CYP3A4 metabolised).","mechanism":"CYP3A4 inhibition → markedly elevated simvastatin levels → muscle toxicity."},
+                {"drug_a":"simvastatin","drug_b":"clarithromycin","severity":"severe","description":"Clarithromycin strongly inhibits CYP3A4, causing dangerous accumulation of simvastatin.","recommendation":"Temporarily withhold simvastatin during clarithromycin course. Use azithromycin instead if possible.","mechanism":"CYP3A4 inhibition → >10x increase in simvastatin exposure → rhabdomyolysis."},
+                {"drug_a":"atorvastatin","drug_b":"clarithromycin","severity":"moderate","description":"Clarithromycin increases atorvastatin levels via CYP3A4 inhibition.","recommendation":"Temporarily withhold or use lowest dose atorvastatin during clarithromycin course.","mechanism":"CYP3A4 inhibition → increased atorvastatin exposure."},
+                # ── Serotonin syndrome risk ────────────────────────────────────
+                {"drug_a":"sertraline","drug_b":"tramadol","severity":"moderate","description":"Both drugs increase serotonergic activity. Combination increases risk of serotonin syndrome (agitation, hyperthermia, clonus, autonomic instability).","recommendation":"Avoid combination if possible. If used, monitor for serotonin syndrome symptoms. Use paracetamol/low-dose codeine instead.","mechanism":"SSRI inhibits serotonin reuptake; tramadol inhibits serotonin/noradrenaline reuptake + weak mu-opioid."},
+                {"drug_a":"fluoxetine","drug_b":"tramadol","severity":"moderate","description":"Same serotonin syndrome risk. Fluoxetine also inhibits CYP2D6, reducing tramadol conversion to active form (paradoxically).","recommendation":"Avoid. Use alternative analgesic.","mechanism":"Dual serotonergic mechanism + CYP2D6 inhibition."},
+                {"drug_a":"sertraline","drug_b":"codeine","severity":"mild","description":"Sertraline inhibits CYP2D6, reducing conversion of codeine to morphine (reduced analgesic effect) but also potentially reducing toxicity.","recommendation":"Codeine may be less effective. Consider alternative analgesic.","mechanism":"CYP2D6 inhibition reduces codeine O-demethylation to morphine."},
+                {"drug_a":"fluoxetine","drug_b":"codeine","severity":"moderate","description":"Fluoxetine is a strong CYP2D6 inhibitor — markedly reduces codeine conversion to morphine, negating analgesia.","recommendation":"Use alternative analgesic (paracetamol, NSAIDs). Codeine is ineffective with fluoxetine.","mechanism":"Strong CYP2D6 inhibition → reduced morphine production from codeine."},
+                # ── Opioid combinations ────────────────────────────────────────
+                {"drug_a":"morphine","drug_b":"diazepam","severity":"severe","description":"Additive CNS and respiratory depression. Risk of apnoea and death.","recommendation":"Avoid routine combination. If both clinically necessary (palliative), use lowest effective doses with monitoring.","mechanism":"Additive CNS/respiratory depression via opioid receptors + GABA-A enhancement."},
+                {"drug_a":"codeine","drug_b":"diazepam","severity":"moderate","description":"Additive sedation and respiratory depression.","recommendation":"Use with caution. Avoid in elderly and respiratory impairment.","mechanism":"Additive CNS depression."},
+                {"drug_a":"tramadol","drug_b":"diazepam","severity":"moderate","description":"Additive sedation and respiratory depression risk.","recommendation":"Use lowest effective doses. Avoid in elderly.","mechanism":"Additive CNS depression."},
+                # ── Theophylline interactions ──────────────────────────────────
+                {"drug_a":"theophylline","drug_b":"ciprofloxacin","severity":"moderate","description":"Ciprofloxacin inhibits CYP1A2, increasing theophylline levels and toxicity risk (nausea, seizures, arrhythmias).","recommendation":"Reduce theophylline dose by ~50% when adding ciprofloxacin. Monitor serum theophylline levels.","mechanism":"CYP1A2 inhibition → reduced theophylline clearance."},
+                {"drug_a":"theophylline","drug_b":"azithromycin","severity":"moderate","description":"Azithromycin can increase theophylline levels through uncertain mechanism.","recommendation":"Monitor theophylline levels during azithromycin course.","mechanism":"Possible inhibition of theophylline metabolism."},
+                {"drug_a":"theophylline","drug_b":"clarithromycin","severity":"moderate","description":"Clarithromycin inhibits CYP3A4, increasing theophylline levels.","recommendation":"Monitor theophylline levels. Reduce dose if toxicity signs appear.","mechanism":"CYP3A4 inhibition."},
+                # ── Thyroid interactions ───────────────────────────────────────
+                {"drug_a":"levothyroxine","drug_b":"calcium carbonate","severity":"moderate","description":"Calcium carbonate reduces levothyroxine absorption by forming insoluble complexes in the GI tract.","recommendation":"Take levothyroxine at least 4 hours before calcium supplements.","mechanism":"Physical chelation of levothyroxine in the GI tract."},
+                {"drug_a":"levothyroxine","drug_b":"ferrous fumarate","severity":"moderate","description":"Iron salts reduce levothyroxine absorption.","recommendation":"Take levothyroxine at least 4 hours before iron supplements.","mechanism":"Formation of insoluble levothyroxine-iron complexes in GI tract."},
+                # ── Immunosuppressant interactions ────────────────────────────
+                {"drug_a":"azathioprine","drug_b":"allopurinol","severity":"severe","description":"Allopurinol inhibits xanthine oxidase, which metabolises azathioprine's toxic metabolite. Results in 4x increase in azathioprine toxicity (bone marrow suppression, fatal).","recommendation":"Contraindicated. If xanthine oxidase inhibitor needed, use febuxostat with extreme caution and 75% azathioprine dose reduction. Better to switch azathioprine to mycophenolate.","mechanism":"Xanthine oxidase inhibition → accumulation of 6-mercaptopurine toxic metabolites."},
+                {"drug_a":"prednisolone","drug_b":"metformin","severity":"mild","description":"Corticosteroids antagonise insulin action, raising blood glucose — may require metformin dose adjustment in diabetics.","recommendation":"Monitor blood glucose when starting/stopping steroids. Adjust antidiabetic therapy accordingly.","mechanism":"Glucocorticoids increase gluconeogenesis and insulin resistance."},
+                {"drug_a":"prednisolone","drug_b":"ibuprofen","severity":"moderate","description":"Corticosteroids and NSAIDs together dramatically increase GI ulceration risk.","recommendation":"Avoid combination. If unavoidable, add PPI (omeprazole/pantoprazole).","mechanism":"Additive GI mucosal damage."},
+                # ── Anticonvulsant interactions ────────────────────────────────
+                {"drug_a":"sodium valproate","drug_b":"carbamazepine","severity":"moderate","description":"Carbamazepine reduces valproate levels through enzyme induction. Valproate inhibits carbamazepine metabolism.","recommendation":"Monitor both drug levels. Complex interaction requiring careful titration.","mechanism":"Bidirectional: CBZ induces valproate metabolism; valproate inhibits CBZ-epoxide hydrolase."},
+                {"drug_a":"sodium valproate","drug_b":"aspirin","severity":"moderate","description":"Aspirin displaces valproate from plasma protein and inhibits its metabolism, increasing free valproate levels.","recommendation":"Avoid high-dose aspirin with valproate. Use paracetamol instead.","mechanism":"Protein displacement + metabolic inhibition → elevated free valproate."},
+                # ── Metformin interactions ─────────────────────────────────────
+                {"drug_a":"metformin","drug_b":"furosemide","severity":"mild","description":"Furosemide can increase metformin levels by competing for tubular secretion and causing volume depletion.","recommendation":"Monitor renal function. Hold metformin if dehydration occurs.","mechanism":"Reduced renal tubular secretion + volume depletion reduces metformin clearance."},
+                # ── QT-prolongation risk combos ────────────────────────────────
+                {"drug_a":"ciprofloxacin","drug_b":"hydroxychloroquine","severity":"moderate","description":"Both drugs prolong QT interval — additive risk of potentially fatal cardiac arrhythmia (torsades de pointes).","recommendation":"Avoid combination. If both required, obtain baseline ECG and monitor QT regularly.","mechanism":"Additive cardiac K+ channel (hERG) blockade → QT prolongation."},
+                {"drug_a":"azithromycin","drug_b":"hydroxychloroquine","severity":"moderate","description":"Additive QT prolongation risk.","recommendation":"Avoid. Obtain ECG before starting combination.","mechanism":"Additive hERG channel blockade."},
+                {"drug_a":"haloperidol","drug_b":"metoclopramide","severity":"moderate","description":"Both drugs block dopamine receptors. Additive extrapyramidal side effects and QT prolongation.","recommendation":"Avoid combination. Use ondansetron for nausea in patients on haloperidol.","mechanism":"Additive dopamine D2 antagonism + additive QT prolongation."},
+                # ── Parkinson's interactions ───────────────────────────────────
+                {"drug_a":"levodopa","drug_b":"metoclopramide","severity":"moderate","description":"Metoclopramide is a central dopamine antagonist that opposes levodopa's therapeutic effect and can worsen Parkinsonism.","recommendation":"Contraindicated in Parkinson's disease. Use domperidone for nausea (peripherally acting only).","mechanism":"Central dopamine D2 blockade opposing levodopa's dopaminergic effect."},
+                {"drug_a":"levodopa","drug_b":"haloperidol","severity":"moderate","description":"Haloperidol blocks dopamine receptors, directly opposing levodopa's therapeutic effect.","recommendation":"Avoid antipsychotics in Parkinson's patients. If essential, use clozapine or quetiapine (low D2 affinity).","mechanism":"Dopamine D2 receptor antagonism opposes levodopa."},
+                # ── Renal interactions ─────────────────────────────────────────
+                {"drug_a":"vancomycin","drug_b":"furosemide","severity":"moderate","description":"Both drugs are nephrotoxic and ototoxic. Combination increases risk of acute kidney injury and hearing loss.","recommendation":"Monitor renal function and vancomycin levels closely. Use lowest effective furosemide dose.","mechanism":"Additive nephrotoxicity and ototoxicity."},
+                # ── GI drug interactions ───────────────────────────────────────
+                {"drug_a":"metoclopramide","drug_b":"digoxin","severity":"moderate","description":"Metoclopramide accelerates GI motility, reducing digoxin absorption from slow-release formulations.","recommendation":"Monitor digoxin levels. Use liquid or rapid-dissolution formulations if both are essential.","mechanism":"Increased GI motility reduces digoxin absorption time."},
+                # ── Antidiabetic interactions ──────────────────────────────────
+                {"drug_a":"glipizide","drug_b":"ciprofloxacin","severity":"moderate","description":"Fluoroquinolones can cause both hypoglycaemia and hyperglycaemia in patients on sulfonylureas.","recommendation":"Monitor blood glucose closely during ciprofloxacin therapy.","mechanism":"Fluoroquinolones stimulate insulin secretion unpredictably."},
+                {"drug_a":"metformin","drug_b":"alcohol","severity":"moderate","description":"Alcohol potentiates metformin's risk of lactic acidosis by inhibiting gluconeogenesis and increasing lactate production.","recommendation":"Advise against regular alcohol use with metformin. Avoid binge drinking entirely.","mechanism":"Alcohol inhibits lactate clearance → lactic acidosis risk, especially with hepatic impairment."},
+                # ── Antidepressant interactions ────────────────────────────────
+                {"drug_a":"escitalopram","drug_b":"omeprazole","severity":"mild","description":"Omeprazole inhibits CYP2C19, increasing escitalopram plasma levels and QT prolongation risk.","recommendation":"Use pantoprazole instead or use lower escitalopram doses. Avoid maximum doses.","mechanism":"CYP2C19 inhibition → increased escitalopram exposure."},
+                {"drug_a":"venlafaxine","drug_b":"tramadol","severity":"moderate","description":"Both drugs increase serotonin. Risk of serotonin syndrome. Venlafaxine also inhibits CYP2D6, reducing tramadol conversion.","recommendation":"Avoid combination. Use paracetamol or low-dose NSAIDs for analgesia.","mechanism":"Additive serotonergic activity + CYP2D6 inhibition."},
+            ]
+            db.session.add_all([DrugInteraction(**ix) for ix in _IX])
+            db.session.commit()
+            print(f"[DB] Seeded {len(_IX)} drug interactions.")
 
         # 1. Seed patients & staff if empty
         if not Patient.query.first():
@@ -434,9 +787,29 @@ def setup_database(app):
                 Staff(id=204, name="Admin Tarek Nour", role="Admin", password="123"),
             ]
 
+            # Hash all seeded passwords before committing
+            for u in patients + staff_members:
+                u.password = generate_password_hash(u.password)
             db.session.add_all(patients + staff_members)
             db.session.commit()
             print("Seeded {} patients and {} staff.".format(len(patients), len(staff_members)))
+
+        # One-time migration: rehash any remaining plaintext passwords
+        try:
+            needs_commit = False
+            for p in Patient.query.all():
+                if not p.password.startswith(('pbkdf2:', 'scrypt:', 'argon2')):
+                    p.password = generate_password_hash(p.password)
+                    needs_commit = True
+            for s in Staff.query.all():
+                if not s.password.startswith(('pbkdf2:', 'scrypt:', 'argon2')):
+                    s.password = generate_password_hash(s.password)
+                    needs_commit = True
+            if needs_commit:
+                db.session.commit()
+                print("[SECURITY] Rehashed plaintext passwords in existing DB.")
+        except Exception as _e:
+            print(f"[SECURITY] Password migration skipped: {_e}")
 
         # 2. Populate Doctors/Departments from CSV if missing
         if Doctor.query.first() is None:
@@ -735,25 +1108,32 @@ def root():
 # --- MISSING ROUTE: MY APPOINTMENTS ---
 @app.route("/api/my_appointments", methods=["GET"])
 def api_my_appointments():
-    # 1. Check Login
-    if 'user_name' not in session: 
+    if 'user_id' not in session:
         return jsonify({"success": False, "error": "Not logged in"})
-    
+
+    user_id   = session['user_id']
     user_name = session['user_name']
-    
-    # 2. Find appointments for this patient (Case Insensitive)
-    apps = Appointment.query.filter(db.func.lower(Appointment.patient_name) == db.func.lower(user_name)).all()
-    
-    # 3. Format data
+
+    # Prefer patient_id FK; fall back to name match for legacy rows
+    apps = Appointment.query.filter(
+        db.or_(
+            Appointment.patient_id == user_id,
+            db.and_(
+                Appointment.patient_id.is_(None),
+                db.func.lower(Appointment.patient_name) == db.func.lower(user_name)
+            )
+        )
+    ).all()
+
     results = []
     for a in apps:
         doc = Doctor.query.get(a.doctor_id)
         results.append({
-            "id":     a.id,
-            "doctor": doc.name if doc else "Unknown",
+            "id":       a.id,
+            "doctor":   doc.name if doc else "Unknown",
             "specialty": doc.specialty if doc else "",
-            "date": a.appointment_date.strftime("%Y-%m-%d"),
-            "time": a.time_slot.strftime("%H:%M")
+            "date":     a.appointment_date.strftime("%Y-%m-%d"),
+            "time":     a.time_slot.strftime("%H:%M")
         })
 
     return jsonify({"success": True, "appointments": results})
@@ -761,12 +1141,16 @@ def api_my_appointments():
 
 @app.route("/api/appointments/<int:appt_id>", methods=["DELETE"])
 def api_cancel_appointment(appt_id):
-    if 'user_name' not in session:
+    if 'user_id' not in session:
         return jsonify({"success": False, "error": "Not logged in"}), 401
     appt = Appointment.query.get(appt_id)
     if not appt:
         return jsonify({"success": False, "error": "Appointment not found"}), 404
-    if appt.patient_name.lower() != session['user_name'].lower():
+    user_id = session['user_id']
+    # Ownership check: use patient_id FK if set, else fall back to name
+    owns = (appt.patient_id == user_id) if appt.patient_id else \
+           (appt.patient_name.lower() == session.get('user_name', '').lower())
+    if not owns:
         return jsonify({"success": False, "error": "Not your appointment"}), 403
     db.session.delete(appt)
     db.session.commit()
@@ -832,7 +1216,10 @@ def process_audio():
         return jsonify({"reply": "No audio received."})
     file    = request.files['file']
     ui_lang = request.form.get("lang", "")
-    temp_filename = "temp_voice.wav"
+    # Use a unique temp file per request to prevent race conditions
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    temp_filename = tmp.name
+    tmp.close()
     file.save(temp_filename)
     try:
         # 1. Whisper transcription (faster-whisper API)
@@ -869,10 +1256,8 @@ def process_audio():
         mem = ConversationMemory(db, PatientMemory)
         memory_ctx = mem.get_context(user_id) if user_id else ""
 
-        # 6. Voice conversation history (persist across turns via session)
-        voice_history = session.get('voice_history', [])
-        # Keep last 10 turns to stay within token limits
-        voice_history = voice_history[-10:]
+        # 6. Voice conversation history — trim immediately to cap memory usage
+        voice_history = session.get('voice_history', [])[-10:]
 
         # 7. Run full agentic loop with all features
         ai_reply, tool_results = run_agentic_loop(
@@ -887,11 +1272,23 @@ def process_audio():
         session['voice_history'] = voice_history[-10:]
 
         print(f"[VOICE] Reply: {ai_reply}")
+        _slog("voice_interaction", patient_name=user_name, patient_id=user_id,
+              success=True, lang=lang,
+              user_said=user_text[:200],
+              ai_replied=ai_reply[:300],
+              sentiment=sentiment.get("label", "neutral") if sentiment else "neutral",
+              tools_used=[r.get("tool") for r in tool_results if isinstance(r, dict) and r.get("tool")])
         return jsonify({"text": user_text, "reply": ai_reply, "lang": lang})
 
     except Exception as e:
         print(f"[VOICE ERROR] {e}")
+        _slog("voice_interaction", success=False, error=str(e))
         return jsonify({"reply": "I could not understand. Please try again."})
+    finally:
+        try:
+            os.unlink(temp_filename)
+        except OSError:
+            pass
 
 # --- 3. LOGIN / AUTH ---
 @app.route("/api/login", methods=["POST"])
@@ -908,12 +1305,16 @@ def api_login():
     if role == 'staff': user = Staff.query.filter_by(id=user_id).first()
     elif role == 'patient': user = Patient.query.filter_by(id=user_id).first()
     
-    if user and user.password == password:
+    if user and check_password_hash(user.password, password):
         session['user_id'] = user.id
         session['user_name'] = user.name
         session['role'] = role
+        _slog("patient_login", patient_name=user.name, patient_id=user.id,
+              success=True, role=role)
         return jsonify({"success": True, "name": user.name})
-    
+
+    _slog("patient_login", success=False, role=role,
+          attempted_id=user_id, error="Invalid credentials")
     return jsonify({"success": False, "error": "Invalid Credentials"})
 
 @app.route("/api/logout", methods=["POST"])
@@ -923,8 +1324,9 @@ def api_logout():
 
 @app.route("/api/me", methods=["GET"])
 def api_me():
-    if 'user_name' in session:
-        return jsonify({"loggedIn": True, "name": session['user_name']})
+    if 'user_id' in session:
+        return jsonify({"loggedIn": True, "name": session.get('user_name', ''),
+                        "role": session.get('role', '')})
     return jsonify({"loggedIn": False})
 
 # ===============================================================
@@ -1010,6 +1412,8 @@ def _clean_doctor_name(name):
 
 def execute_tool(tool_name, tool_input, user_id, user_name, role):
     """Execute a chatbot tool and return result dict."""
+    if tool_input is None:
+        tool_input = {}
     try:
         if tool_name == "get_departments":
             depts = db.session.query(Doctor.specialty).distinct().all()
@@ -1037,9 +1441,9 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
         elif tool_name == "book_appointment":
             if role != 'patient':
                 return {"error": "Only logged-in patients can book appointments."}
-            doctor_name = _clean_doctor_name(tool_input.get("doctor_name", ""))
-            date_str    = tool_input.get("date", "")
-            time_str    = tool_input.get("time_slot", "")
+            doctor_name = _clean_doctor_name(tool_input.get("doctor_name", "") if tool_input else "")
+            date_str    = (tool_input or {}).get("date", "")
+            time_str    = (tool_input or {}).get("time_slot", "")
             doctor = Doctor.query.filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
             if not doctor:
                 return {"error": f"Doctor '{doctor_name}' not found."}
@@ -1049,10 +1453,49 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
                 appt_time = dt.strptime(time_str, "%H:%M").time()
             except ValueError:
                 return {"error": "Invalid date or time format. Use YYYY-MM-DD and HH:MM."}
-            appt = Appointment(doctor_id=doctor.id, patient_name=user_name,
+
+            # Past-date/time guard
+            from datetime import datetime as _dt_now
+            today = date_type.today()
+            now_time = _dt_now.now().time()
+            if appt_date < today:
+                return {"error": f"Cannot book an appointment in the past ({date_str})."}
+            if appt_date == today and appt_time <= now_time:
+                return {"error": f"The time slot {time_str} has already passed today. Please choose a future time."}
+
+            # Check the requested time falls within the doctor's schedule
+            day_of_week = appt_date.weekday()  # 0=Monday
+            slots = Schedule.query.filter_by(doctor_id=doctor.id, day_of_week=day_of_week).all()
+            if slots:
+                in_schedule = any(s.start_time <= appt_time <= s.end_time for s in slots)
+                if not in_schedule:
+                    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+                    avail = ", ".join(
+                        f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} "
+                        f"{s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')}"
+                        for s in Schedule.query.filter_by(doctor_id=doctor.id).all()
+                    )
+                    return {"error": f"Dr. {doctor.name} is not available on {days[day_of_week]} at {time_str}. "
+                                     f"Available slots: {avail or 'none listed'}."}
+
+            # Duplicate slot guard
+            conflict = Appointment.query.filter_by(
+                doctor_id=doctor.id,
+                appointment_date=appt_date,
+                time_slot=appt_time
+            ).first()
+            if conflict:
+                return {"error": f"Dr. {doctor.name} already has an appointment at {time_str} on {date_str}. "
+                                 "Please choose a different time."}
+
+            appt = Appointment(doctor_id=doctor.id, patient_id=user_id,
+                               patient_name=user_name,
                                appointment_date=appt_date, time_slot=appt_time)
             db.session.add(appt)
             db.session.commit()
+            _slog("appointment_booked", patient_name=user_name, patient_id=user_id,
+                  success=True, doctor=doctor.name, specialty=doctor.specialty,
+                  date=date_str, time=time_str, appointment_id=appt.id)
             return {"success": True, "appointment_id": appt.id,
                     "doctor": doctor.name, "specialty": doctor.specialty,
                     "date": date_str, "time": time_str,
@@ -1084,6 +1527,9 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
                     "time": appt.time_slot.strftime("%H:%M")}
             db.session.delete(appt)
             db.session.commit()
+            _slog("appointment_cancelled", patient_name=user_name, patient_id=user_id,
+                  success=True, appointment_id=appt_id,
+                  doctor=info["doctor"], date=info["date"], time=info["time"])
             return {"success": True, "cancelled": info}
 
         elif tool_name == "get_patient_profile":
@@ -1192,12 +1638,14 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
             if raw_tc:
                 # Treat it the same as a native tool call
                 t_name  = raw_tc.get("name", "")
-                t_input = raw_tc.get("arguments", {})
+                t_input = raw_tc.get("arguments") or {}
                 if isinstance(t_input, str):
                     try:
                         t_input = json.loads(t_input)
                     except Exception:
                         t_input = {}
+                if not isinstance(t_input, dict):
+                    t_input = {}
                 valid_tools = {t["name"] for t in CHAT_TOOLS}
                 if t_name in valid_tools:
                     print(f"[TOOL-OFFLINE-RAW] {t_name}({t_input})")
@@ -1218,13 +1666,15 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
 
             for tc in tool_calls:
                 fn = tc.get("function", {})
-                t_name = fn.get("name", "")
-                t_input = fn.get("arguments", {})
+                t_name  = fn.get("name", "")
+                t_input = fn.get("arguments") or {}
                 if isinstance(t_input, str):
                     try:
                         t_input = json.loads(t_input)
                     except json.JSONDecodeError:
                         t_input = {}
+                if not isinstance(t_input, dict):
+                    t_input = {}
 
                 valid_tools = {t["name"] for t in CHAT_TOOLS}
                 if t_name not in valid_tools:
@@ -1415,7 +1865,8 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
 def api_chat_ai():
     data      = request.get_json()
     user_text = data.get("message", "")
-    history   = data.get("history", [])
+    # Server-side cap: prevent context-window overflow for long-running sessions
+    history   = data.get("history", [])[-20:]
     lang      = data.get("lang", "en")
 
     # Resolve identity: Flask session only (never trust payload for auth)
@@ -1442,6 +1893,12 @@ def api_chat_ai():
             history=history, voice_mode=False,
             sentiment=sentiment, ner_entities=ner_entities, memory_ctx=memory_ctx
         )
+        _slog("chat_message", patient_name=user_name, patient_id=user_id,
+              success=True, lang=lang,
+              user_said=user_text[:200],
+              ai_replied=final_text[:300],
+              sentiment=sentiment.get("label", "neutral") if sentiment else "neutral",
+              tools_used=[r.get("tool") for r in tool_results if isinstance(r, dict) and r.get("tool")])
         return jsonify({
             "success": True,
             "answer": final_text,
@@ -1451,6 +1908,8 @@ def api_chat_ai():
         })
     except Exception as e:
         print(f"[CHAT ERROR] {e}")
+        _slog("chat_message", patient_name=user_name, patient_id=user_id,
+              success=False, user_said=user_text[:200], error=str(e))
         return jsonify({"success": False, "answer": "I am having trouble thinking right now. Please try again."})
     
 # --- 4. SIGNUP ---
@@ -1465,17 +1924,20 @@ def api_signup():
     if not user_id or not name or not password or role not in ('patient', 'staff'):
         return jsonify({"success": False, "error": "Missing required fields"}), 400
 
+    hashed_pw = generate_password_hash(password)
     if role == 'patient':
         if Patient.query.get(user_id): return jsonify({"success": False, "error": "ID Taken"})
         case_num = data.get("case_number")
-        db.session.add(Patient(id=user_id, name=name, password=password, case_number=case_num))
+        db.session.add(Patient(id=user_id, name=name, password=hashed_pw, case_number=case_num))
     elif role == 'staff':
         if Staff.query.get(user_id): return jsonify({"success": False, "error": "ID Taken"})
-        db.session.add(Staff(id=user_id, name=name, password=password, role="Staff"))
+        db.session.add(Staff(id=user_id, name=name, password=hashed_pw, role="Staff"))
     else:
         return jsonify({"success": False, "error": "Invalid Role"})
         
     db.session.commit()
+    _slog("patient_signup", patient_name=name, patient_id=user_id,
+          success=True, role=role)
     return jsonify({"success": True})
 
 # --- 5. TRIAGE ASSESSMENT ---
@@ -1534,7 +1996,7 @@ def api_triage_assess():
         rec_en = "Your condition is serious. Please go directly to Emergency Reception — a nurse will assess you within 10 minutes."
         rec_ar = "حالتك خطيرة. يرجى التوجه فوراً إلى استقبال الطوارئ — سيتم تقييمك خلال 10 دقائق."
         department = "Emergency Medicine"
-    elif pain >= 5 or len(symptoms) >= 1:
+    elif pain >= 5 or len(symptoms) >= 2:
         level, label, color = 3, "URGENT", "Yellow"
         dept_map = {
             "heart": "Cardiology",
@@ -1597,6 +2059,32 @@ def api_triage_assess():
             recommendation = ai_rec
     except Exception:
         pass  # fall back to rule-based recommendation above
+
+    _slog("triage_assessed",
+          patient_name=session.get("user_name", "Guest"),
+          patient_id=session.get("user_id"),
+          success=True,
+          complaint=complaint[:150], pain_score=pain,
+          symptoms=symptoms, level=level, label=label,
+          color=color, department=department)
+
+    # Save to triage history
+    try:
+        th = TriageHistory(
+            patient_id=session.get("user_id"),
+            patient_name=session.get("user_name", "Guest"),
+            chief_complaint=data.get("chiefComplaint", "")[:299],
+            severity=level,
+            severity_label=label,
+            symptoms_json=json.dumps(symptoms),
+            vitals_json=json.dumps({"pain_scale": pain}),
+            ai_recommendation=recommendation,
+            department_referred=department,
+        )
+        db.session.add(th)
+        db.session.commit()
+    except Exception:
+        pass  # Never let history saving break the triage response
 
     return jsonify({
         "success": True,
@@ -1753,7 +2241,7 @@ def api_symptom_check():
     data     = request.get_json()
     symptoms = data.get("symptoms", [])
     lang     = data.get("lang", "en")
-    user_id  = session.get('user_id') or data.get("patient_id")
+    user_id  = session.get('user_id')
     patient_ctx = get_patient_context(user_id) if session.get('role') == 'patient' else ""
     result = symptom_checker.check(symptoms, patient_ctx=patient_ctx, lang=lang)
     return jsonify({"success": True, **result})
@@ -1809,14 +2297,22 @@ def api_face_login():
         return jsonify({"success": False, "error": "No image provided."})
     result = face_auth.recognize(image)
     if result.get("success"):
-        patient_id = result["patient_id"]
-        patient = Patient.query.get(int(patient_id))
+        try:
+            patient_id = int(result["patient_id"])
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "Invalid patient ID from face recognition."})
+        patient = Patient.query.get(patient_id)
         if patient:
             session['user_id']   = patient.id
             session['user_name'] = patient.name
             session['role']      = 'patient'
+            _slog("face_login", patient_name=patient.name, patient_id=patient.id,
+                  success=True, confidence=result.get("confidence"))
             return jsonify({"success": True, "name": patient.name,
                             "confidence": result["confidence"]})
+    _slog("face_login", success=False,
+          error=result.get("error", "Not recognized"),
+          confidence=result.get("confidence"))
     return jsonify({"success": False, "error": result.get("error", "Not recognized."),
                     "confidence": result.get("confidence")})
 
@@ -1830,7 +2326,7 @@ def api_face_status():
 def api_memory_save():
     data     = request.get_json()
     history  = data.get("history", [])
-    user_id  = session.get('user_id') or data.get("patient_id")
+    user_id  = session.get('user_id')
     if not user_id or not history:
         return jsonify({"success": False})
     mem = ConversationMemory(db, PatientMemory)
@@ -1854,9 +2350,9 @@ def api_vision_chat():
     text      = data.get("message", "Describe this medical image and provide advice.")
     image_b64 = data.get("image")   # base64 data URL or raw base64
     lang      = data.get("lang", "en")
-    user_id   = session.get('user_id') or data.get("patient_id")
-    user_name = session.get('user_name') or data.get("user_name", "Guest")
-    role      = session.get('role') or data.get("role", "guest")
+    user_id   = session.get('user_id')
+    user_name = session.get('user_name', 'Guest')
+    role      = session.get('role', 'guest')
     patient_ctx = get_patient_context(user_id) if role == 'patient' else ""
 
     if not image_b64:
@@ -1912,6 +2408,510 @@ def api_vision_chat():
     except Exception as e:
         print(f"[VISION] Error: {e}")
         return jsonify({"success": False, "answer": "Could not analyze the image."})
+
+
+# ── SESSION LOG ENDPOINTS ────────────────────────────────────────────────────
+
+@app.route("/api/session/event", methods=["POST"])
+def api_session_event():
+    """Receive a session event from external processes (nav_bridge, MainVoice, etc.)."""
+    data = request.get_json(silent=True) or {}
+    _slog(
+        action       = data.get("action", "event"),
+        patient_name = data.get("patient_name"),
+        patient_id   = data.get("patient_id"),
+        success      = data.get("success", True),
+        duration_ms  = data.get("duration_ms"),
+        **{k: v for k, v in data.get("details", {}).items()}
+    )
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session/log", methods=["GET"])
+def api_session_log():
+    """Return session events for a given date (default: today). ?date=YYYY-MM-DD&last=N"""
+    from session_logger import _resolve_log_dir
+    date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    last_n   = int(request.args.get("last", 200))
+    log_path = os.path.join(_resolve_log_dir(), "%s.jsonl" % date_str)
+    if not os.path.exists(log_path):
+        return jsonify({"date": date_str, "events": [], "total": 0})
+    events = []
+    with open(log_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    pass
+    return jsonify({"date": date_str, "events": events[-last_n:], "total": len(events)})
+
+
+@app.route("/api/session/summary", methods=["GET"])
+def api_session_summary():
+    """Return a counts summary for today's session."""
+    from session_logger import _resolve_log_dir
+    date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    log_path = os.path.join(_resolve_log_dir(), "%s.jsonl" % date_str)
+    counts   = {}
+    errors   = 0
+    patients = set()
+    if os.path.exists(log_path):
+        with open(log_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                    counts[ev["action"]] = counts.get(ev["action"], 0) + 1
+                    if not ev.get("success"):
+                        errors += 1
+                    if ev.get("patient_name"):
+                        patients.add(ev["patient_name"])
+                except Exception:
+                    pass
+    return jsonify({"date": date_str, "counts": counts,
+                    "unique_patients": len(patients), "total_errors": errors})
+
+
+# ── DIAGNOSTIC ENDPOINTS ─────────────────────────────────────────────────────
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Server health check — used by run_diagnostic.py and monitoring tools."""
+    return jsonify({
+        "status":          "ok",
+        "uptime_seconds":  round(time.time() - SERVER_START_TIME, 1),
+        "rag_ready":       True,
+        "emotion_ready":   emotion_detector is not None,
+        "whisper_ready":   audio_model is not None,
+        "offline_mode":    OFFLINE_MODE,
+        "timestamp":       datetime.now().isoformat(),
+    })
+
+
+@app.route("/api/diagnostic/report", methods=["GET"])
+def api_diagnostic_report():
+    """Return the most recent diagnostic report JSON from diagnostic_logs/."""
+    import glob as _g
+    log_base = Path(__file__).resolve().parents[3] / "diagnostic_logs"
+    if not log_base.exists():
+        return jsonify({"error": "No diagnostic_logs directory found"}), 404
+    reports = sorted(_g.glob(str(log_base / "*/report.json")), reverse=True)
+    if not reports:
+        return jsonify({"error": "No diagnostic reports found — run run_diagnostic.py first"}), 404
+    with open(reports[0], "r") as f:
+        report = json.load(f)
+    return jsonify(report)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NEW FEATURE ROUTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── VITALS ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/vitals/record", methods=["POST"])
+def api_vitals_record():
+    """Record a vital signs reading for the logged-in patient. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    vital_fields = ["pain_scale","temperature","systolic_bp","diastolic_bp",
+                    "heart_rate","oxygen_sat","respiratory_rate",
+                    "blood_glucose","weight_kg","height_cm"]
+    kwargs = {k: data.get(k) for k in vital_fields}
+    # Run offline rule-based alerts
+    alerts = check_vital_alerts(kwargs)
+    record = VitalRecord(
+        patient_id=user_id,
+        recorded_by=data.get("recorded_by", "patient"),
+        notes=data.get("notes", ""),
+        alerts=json.dumps(alerts),
+        **{k: v for k, v in kwargs.items() if v is not None},
+    )
+    db.session.add(record)
+    db.session.commit()
+    _slog("vital_recorded", patient_id=user_id, patient_name=session.get('user_name'),
+          success=True, alerts=len(alerts))
+    return jsonify({"success": True, "id": record.id, "alerts": alerts,
+                    "critical": any("CRITICAL" in a for a in alerts)})
+
+
+@app.route("/api/vitals/history", methods=["GET"])
+def api_vitals_history():
+    """Return vital sign history for logged-in patient. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    limit   = min(int(request.args.get("limit", 20)), 100)
+    records = (VitalRecord.query
+               .filter_by(patient_id=user_id)
+               .order_by(VitalRecord.recorded_at.desc())
+               .limit(limit).all())
+    return jsonify({"success": True, "records": [r.to_dict() for r in records],
+                    "total": len(records)})
+
+
+@app.route("/api/vitals/analyze", methods=["GET"])
+def api_vitals_analyze():
+    """AI trend analysis of patient vitals. OFFLINE (Ollama) / ONLINE (Claude)."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    records = (VitalRecord.query
+               .filter_by(patient_id=user_id)
+               .order_by(VitalRecord.recorded_at.asc())
+               .limit(30).all())
+    if not records:
+        return jsonify({"success": True, "analysis": "No vital records found.",
+                        "source": "rule_based"})
+    record_dicts = [r.to_dict() for r in records]
+    summary      = summarize_vitals(record_dicts)
+    recent_alerts = []
+    for r in record_dicts[-5:]:
+        recent_alerts.extend(r.get("alerts", []))
+    patient = Patient.query.get(user_id)
+    result  = vital_analyzer.analyze_trends(
+        patient_name=patient.name if patient else "Patient",
+        summary=summary,
+        recent_alerts=recent_alerts
+    )
+    return jsonify({"success": True, "summary": summary, **result})
+
+
+# ── MEDICATION REMINDERS ──────────────────────────────────────────────────────
+
+@app.route("/api/medications/reminders", methods=["GET"])
+def api_reminders_get():
+    """Return active medication reminders. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    mgr  = MedicationReminderManager(db, MedicationReminder)
+    data = mgr.get_all(user_id, active_only=True)
+    return jsonify({"success": True, "reminders": data})
+
+
+@app.route("/api/medications/reminders", methods=["POST"])
+def api_reminders_add():
+    """Create a medication reminder. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    med  = data.get("medication_name", "").strip()
+    if not med:
+        return jsonify({"success": False, "error": "medication_name is required."}), 400
+    mgr    = MedicationReminderManager(db, MedicationReminder)
+    result = mgr.add(
+        patient_id=user_id,
+        medication_name=med,
+        dosage=data.get("dosage", ""),
+        frequency=data.get("frequency", ""),
+        times=data.get("times", []),
+        end_date=data.get("end_date"),
+        notes=data.get("notes", ""),
+    )
+    return jsonify(result)
+
+
+@app.route("/api/medications/reminders/<int:rid>", methods=["DELETE"])
+def api_reminders_delete(rid):
+    """Delete a medication reminder. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    mgr = MedicationReminderManager(db, MedicationReminder)
+    return jsonify(mgr.delete(rid, user_id))
+
+
+@app.route("/api/medications/due", methods=["GET"])
+def api_reminders_due():
+    """Return reminders due in the next 30 minutes. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    mgr = MedicationReminderManager(db, MedicationReminder)
+    due = mgr.get_due(user_id, window_minutes=int(request.args.get("window", 30)))
+    return jsonify({"success": True, "due": due, "count": len(due)})
+
+
+# ── DRUG INTERACTIONS ─────────────────────────────────────────────────────────
+
+@app.route("/api/medications/check_interactions", methods=["POST"])
+def api_drug_interactions():
+    """
+    Check drug-drug interactions from local DB. OFFLINE.
+    If a pair is unknown, optionally queries Claude for AI analysis.
+    Body: {"drugs": ["warfarin", "aspirin", "metformin"]}
+    """
+    data  = request.get_json(silent=True) or {}
+    drugs = data.get("drugs", [])
+    if not drugs:
+        # Auto-load from patient profile if logged in
+        user_id = session.get('user_id')
+        if user_id:
+            patient = Patient.query.get(user_id)
+            if patient and patient.current_medications:
+                drugs = [d.strip() for d in patient.current_medications.split(",") if d.strip()]
+    if not drugs:
+        return jsonify({"success": False, "error": "No drugs provided."}), 400
+
+    checker = DrugChecker(db, DrugInteraction, Medication)
+    result  = checker.check(drugs)
+    _slog("drug_interaction_check",
+          patient_id=session.get('user_id'),
+          patient_name=session.get('user_name'),
+          success=True,
+          drug_count=len(drugs),
+          interactions_found=len(result["interactions"]),
+          safe=result["safe"])
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/medications/catalog", methods=["GET"])
+def api_drug_catalog():
+    """Search the local drug catalog. OFFLINE. ?q=<name>&category=<cat>"""
+    q        = request.args.get("q", "").strip()
+    category = request.args.get("category", "").strip()
+    query    = Medication.query
+    if q:
+        query = query.filter(
+            (Medication.name.ilike(f"%{q}%")) |
+            (Medication.generic_name.ilike(f"%{q}%"))
+        )
+    if category:
+        query = query.filter(Medication.category.ilike(f"%{category}%"))
+    meds = query.limit(20).all()
+    result = []
+    for m in meds:
+        result.append({
+            "id": m.id, "name": m.name, "generic_name": m.generic_name,
+            "category": m.category, "dosage_forms": m.dosage_forms,
+            "side_effects": m.common_side_effects,
+            "contraindications": m.contraindications,
+            "pregnancy_category": m.pregnancy_category,
+            "requires_monitoring": m.requires_monitoring,
+            "notes": m.notes,
+        })
+    return jsonify({"success": True, "medications": result, "total": len(result)})
+
+
+# ── FALL DETECTION ────────────────────────────────────────────────────────────
+
+@app.route("/api/fall/start", methods=["POST"])
+def api_fall_start():
+    """Start fall detection monitoring loop. OFFLINE."""
+    data  = request.get_json(silent=True) or {}
+    cam   = int(data.get("camera_index", 0))
+    result = fall_detector.start(camera_index=cam)
+    return jsonify(result)
+
+
+@app.route("/api/fall/stop", methods=["POST"])
+def api_fall_stop():
+    """Stop fall detection. OFFLINE."""
+    return jsonify(fall_detector.stop())
+
+
+@app.route("/api/fall/status", methods=["GET"])
+def api_fall_status():
+    """Return fall detector status. OFFLINE."""
+    return jsonify(fall_detector.status())
+
+
+@app.route("/api/fall/alerts", methods=["GET"])
+def api_fall_alerts():
+    """Return accumulated fall alerts (clears the log). OFFLINE."""
+    clear = request.args.get("clear", "true").lower() == "true"
+    return jsonify({"success": True, "alerts": fall_detector.get_alerts(clear=clear)})
+
+
+@app.route("/api/fall/analyze_frame", methods=["POST"])
+def api_fall_analyze():
+    """Analyze a single base64 JPEG for fall risk. OFFLINE."""
+    data  = request.get_json(silent=True) or {}
+    image = data.get("image", "")
+    if not image:
+        return jsonify({"success": False, "error": "No image provided."}), 400
+    return jsonify({"success": True, **fall_detector.analyze_frame(image)})
+
+
+# ── TRANSLATION ───────────────────────────────────────────────────────────────
+
+@app.route("/api/translate", methods=["POST"])
+def api_translate():
+    """
+    Translate text between Arabic and English.
+    OFFLINE: argostranslate (if installed)
+    ONLINE:  Claude API
+    NO INTERNET: {"success": False, "source": "no_internet", "error": "..."}
+    Body: {"text": "...", "from": "en", "to": "ar"}
+    """
+    data      = request.get_json(silent=True) or {}
+    text      = data.get("text", "").strip()
+    from_lang = data.get("from", "en").lower()
+    to_lang   = data.get("to",   "ar").lower()
+    if not text:
+        return jsonify({"success": False, "error": "No text provided."}), 400
+    if from_lang not in ("en", "ar") or to_lang not in ("en", "ar"):
+        return jsonify({"success": False,
+                        "error": "Only English (en) and Arabic (ar) supported."}), 400
+    result = translator.translate(text, from_lang, to_lang)
+    return jsonify(result)
+
+
+@app.route("/api/translate/status", methods=["GET"])
+def api_translate_status():
+    """Return translator backend availability. OFFLINE."""
+    return jsonify(translator.status())
+
+
+# ── WAIT TIME ESTIMATOR ───────────────────────────────────────────────────────
+
+@app.route("/api/wait_time", methods=["GET"])
+def api_wait_time():
+    """
+    Estimate wait time for a doctor on a date/slot. OFFLINE.
+    ?doctor_id=1&date=2026-04-20&slot=10:00
+    """
+    doctor_id = request.args.get("doctor_id")
+    date_str  = request.args.get("date")
+    slot      = request.args.get("slot")
+    if not doctor_id or not date_str or not slot:
+        return jsonify({"success": False, "error": "doctor_id, date, and slot are required."}), 400
+    est = WaitEstimator(db, Appointment, Schedule, Doctor)
+    result = est.estimate_wait(int(doctor_id), date_str, slot)
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/available_slots", methods=["GET"])
+def api_available_slots():
+    """
+    Return available appointment slots for a doctor on a date. OFFLINE.
+    ?doctor_id=1&date=2026-04-20
+    """
+    doctor_id = request.args.get("doctor_id")
+    date_str  = request.args.get("date")
+    if not doctor_id or not date_str:
+        return jsonify({"success": False, "error": "doctor_id and date are required."}), 400
+    est   = WaitEstimator(db, Appointment, Schedule, Doctor)
+    slots = est.get_available_slots(int(doctor_id), date_str)
+    return jsonify({"success": True, "slots": slots, "count": len(slots)})
+
+
+@app.route("/api/doctor_load", methods=["GET"])
+def api_doctor_load():
+    """Return appointment count for a doctor on a given date. OFFLINE."""
+    doctor_id = request.args.get("doctor_id")
+    date_str  = request.args.get("date")
+    est   = WaitEstimator(db, Appointment, Schedule, Doctor)
+    if doctor_id:
+        return jsonify({"success": True,
+                        **est.doctor_load(int(doctor_id), date_str)})
+    # No doctor_id → return busiest doctors
+    date_str = date_str or datetime.now().strftime("%Y-%m-%d")
+    busiest  = est.busiest_doctors(date_str, top_n=10)
+    return jsonify({"success": True, "date": date_str, "doctors": busiest})
+
+
+# ── SYMPTOM PROGRESSION ───────────────────────────────────────────────────────
+
+@app.route("/api/symptoms/record", methods=["POST"])
+def api_symptoms_record():
+    """
+    Record a symptom entry for the logged-in patient. OFFLINE.
+    Body: {"symptoms": ["chest pain", "shortness of breath"], "severity": "moderate",
+           "context": "started this morning", "source": "voice"}
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data  = request.get_json(silent=True) or {}
+    syms  = data.get("symptoms", [])
+    if not syms:
+        return jsonify({"success": False, "error": "symptoms required."}), 400
+
+    # Also run NER if symptoms provided as text
+    ner_result = None
+    context    = data.get("context", "")
+    if context:
+        ner_result = medical_ner.extract(context)
+
+    tracker = SymptomProgressionTracker(db, SymptomHistory)
+    entry_id = tracker.record(
+        patient_id=user_id,
+        symptoms=syms,
+        severity=data.get("severity"),
+        context=context,
+        ner_results=ner_result,
+        source=data.get("source", "manual"),
+    )
+    _slog("symptom_recorded", patient_id=user_id, patient_name=session.get('user_name'),
+          success=True, symptom_count=len(syms) if isinstance(syms, list) else 1)
+    return jsonify({"success": True, "id": entry_id, "ner": ner_result})
+
+
+@app.route("/api/symptoms/history", methods=["GET"])
+def api_symptoms_history():
+    """Return symptom history for the logged-in patient. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    limit   = min(int(request.args.get("limit", 15)), 50)
+    tracker = SymptomProgressionTracker(db, SymptomHistory)
+    history = tracker.get_history(user_id, limit=limit)
+    return jsonify({"success": True, "history": history, "total": len(history)})
+
+
+@app.route("/api/symptoms/analyze", methods=["GET"])
+def api_symptoms_analyze():
+    """
+    Analyze symptom progression for the logged-in patient.
+    OFFLINE (Ollama) / ONLINE (Claude) / NO INTERNET (rule-based fallback).
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    patient = Patient.query.get(user_id)
+    tracker = SymptomProgressionTracker(db, SymptomHistory)
+    result  = tracker.analyze_progression(
+        user_id, patient_name=patient.name if patient else "Patient"
+    )
+    return jsonify({"success": True, **result})
+
+
+# ── TRIAGE HISTORY ────────────────────────────────────────────────────────────
+
+@app.route("/api/triage/history", methods=["GET"])
+def api_triage_history():
+    """Return triage session history for the logged-in patient. OFFLINE."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    limit   = min(int(request.args.get("limit", 10)), 50)
+    records = (TriageHistory.query
+               .filter_by(patient_id=user_id)
+               .order_by(TriageHistory.assessed_at.desc())
+               .limit(limit).all())
+    result = []
+    for t in records:
+        result.append({
+            "id":                  t.id,
+            "assessed_at":         t.assessed_at.strftime("%Y-%m-%d %H:%M"),
+            "chief_complaint":     t.chief_complaint,
+            "severity":            t.severity,
+            "severity_label":      t.severity_label,
+            "symptoms":            json.loads(t.symptoms_json) if t.symptoms_json else [],
+            "ai_recommendation":   t.ai_recommendation,
+            "department_referred": t.department_referred,
+            "disposition":         t.disposition,
+        })
+    return jsonify({"success": True, "history": result, "total": len(result)})
 
 
 if __name__ == "__main__":

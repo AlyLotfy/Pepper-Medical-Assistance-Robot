@@ -1,0 +1,44 @@
+name: ciircgym
+channels:
+  - defaults
+  - pytorch
+dependencies:
+  - python=3.7
+  - pip
+  - numpy
+  - matplotlib
+  - matplotlib-base
+  - cudatoolkit
+  - torchvision
+  - pytorch
+  - pillow
+  - openssl
+  - cython
+  - git
+  - dill
+  - flake8
+  - imageio
+  - tensorflow
+  - tqdm
+  - notebook
+  - jupyter_kernel_gateway
+  - mpi4py
+  - pip:
+      - matplotlib==3.1.3
+      - pandas==1.0.1
+      - future
+      - gym==0.17.0
+      - opencv-python==4.2.0.34
+      - pybullet
+      - scipy
+      - git+https://github.com/nightrome/cocostuffapi.git#subdirectory=PythonAPI
+      - pillow-SIMD
+      - PyQt5
+      - commentjson
+      - bbox
+      - pyrr
+      - pyyaml
+      - jsonmerge
+      - open3d-python
+      - dill
+      - configargparse

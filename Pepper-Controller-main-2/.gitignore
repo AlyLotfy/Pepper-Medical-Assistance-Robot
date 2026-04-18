@@ -1,0 +1,9 @@
+.idea
+.vscode
+
+*pyc
+*__pyc
+
+# Environment variables - never commit
+.env
+*.env
