@@ -426,6 +426,20 @@ def build_env():
     env["SERVER_IP"]   = SERVER_IP
     env["SERVER_PORT"] = SERVER_PORT
     env["WS_PORT"]     = WS_PORT
+    # Force UTF-8 stdout/stderr so Arabic/Unicode log lines never crash
+    # with 'charmap' codec errors on Windows cp1252 consoles.
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"]       = "1"
+    # Redirect Hugging Face / Whisper model cache to D:\ to avoid filling
+    # C:\ (Whisper large-v3 is ~3 GB). Override by exporting HF_HOME before
+    # launching main.py.
+    if "HF_HOME" not in env:
+        _hf_cache = "D:\\hf_cache"
+        try:
+            os.makedirs(_hf_cache, exist_ok=True)
+            env["HF_HOME"] = _hf_cache
+        except Exception:
+            pass
     return env
 
 

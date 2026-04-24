@@ -25,9 +25,10 @@ class MedicalNER:
                 resp = requests.post(
                     f"{self.ollama_url}/api/chat",
                     json={"model": self.ollama_model, "stream": False,
+                          "options": {"num_predict": max_tokens, "temperature": 0.1},
                           "messages": [{"role": "system", "content": system},
                                        {"role": "user", "content": prompt}]},
-                    timeout=20
+                    timeout=8
                 )
                 return resp.json()["message"]["content"].strip()
             except Exception as e:

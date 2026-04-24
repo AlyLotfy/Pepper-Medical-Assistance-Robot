@@ -428,6 +428,19 @@
 
     me: function () { return load(K.SESSION); },
 
+    /* Write session from server-authenticated data. Used when the user
+       exists in the backend DB but not in the localStorage demo seed
+       (e.g. accounts created directly in the DB). */
+    setSession: function (role, id, name, case_number) {
+      save(K.SESSION, {
+        id: String(id),
+        name: name || '',
+        role: role,
+        case_number: case_number || ('CASE-' + String(id))
+      });
+      return { success: true };
+    },
+
     /* Face login: set session by patient name (called after server recognizes face) */
     loginByName: function (name) {
       var users = getUsers();

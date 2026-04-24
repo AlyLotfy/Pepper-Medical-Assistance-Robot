@@ -90,20 +90,111 @@ current_lang     = "en"
 nav_lock         = threading.Lock()
 
 
+def _ascii(text):
+    """Return an ASCII-safe representation of text for Windows console prints.
+
+    NAOqi exceptions sometimes embed Arabic room names or smart quotes that
+    crash Python 3 on a cp1252 terminal. This never raises.
+    """
+    try:
+        s = text if isinstance(text, str) else str(text)
+    except Exception:
+        s = repr(text)
+    try:
+        return s.encode("ascii", "replace").decode("ascii")
+    except Exception:
+        return "<unprintable>"
+
+
+def _is_destroyed(err):
+    """Detect NAOqi 'module destroyed' / 'Session closed' errors."""
+    msg = _ascii(err)
+    return ("module destroyed" in msg) or ("Session closed" in msg)
+
+
+def _reconnect_robot_proxies():
+    """Rebuild NAOqi proxies after a 'module destroyed' or session drop.
+
+    pynaoqi ALProxy keeps a TCP session that the robot can reclaim after
+    a few minutes of inactivity. After that, every call fails with
+    'module destroyed'. We rebuild all proxies with fresh connections.
+    """
+    global tts_proxy, tablet_proxy, motion_proxy, navigation_proxy, posture_proxy
+    global awareness_proxy, battery_proxy
+    if not NAOQI_AVAILABLE:
+        return
+    try:
+        print("[RECONNECT] Rebuilding NAOqi proxies...")
+        tts_proxy        = ALProxy("ALTextToSpeech", ROBOT_IP, ROBOT_PORT)
+        motion_proxy     = ALProxy("ALMotion",       ROBOT_IP, ROBOT_PORT)
+        navigation_proxy = ALProxy("ALNavigation",   ROBOT_IP, ROBOT_PORT)
+        posture_proxy    = ALProxy("ALRobotPosture", ROBOT_IP, ROBOT_PORT)
+        try:
+            tablet_proxy = ALProxy("ALTabletService", ROBOT_IP, ROBOT_PORT)
+        except Exception:
+            tablet_proxy = None
+        try:
+            awareness_proxy = ALProxy("ALBasicAwareness", ROBOT_IP, ROBOT_PORT)
+        except Exception:
+            awareness_proxy = None
+        try:
+            battery_proxy = ALProxy("ALBattery", ROBOT_IP, ROBOT_PORT)
+        except Exception:
+            battery_proxy = None
+        print("[RECONNECT] Done.")
+    except Exception as e:
+        print("[RECONNECT] Failed: " + _ascii(e))
+
+
+def _ensure_proxies_alive():
+    """Probe motion_proxy with a cheap call; reconnect all proxies if stale.
+
+    Called at the start of every navigation request. NAOqi sessions can go
+    stale after idle periods (we see this after ~7 min idle in logs), and
+    we need a live motion_proxy before attempting to move.
+    """
+    if not NAOQI_AVAILABLE or motion_proxy is None:
+        return False
+    try:
+        motion_proxy.getRobotPosition(True)
+        return True
+    except Exception as e:
+        print("[NAV] motion_proxy stale ({}); reconnecting...".format(_ascii(e)))
+        _reconnect_robot_proxies()
+        try:
+            motion_proxy.getRobotPosition(True)
+            return True
+        except Exception as e2:
+            print("[NAV] motion_proxy still dead after reconnect: " + _ascii(e2))
+            return False
+
+
 def tts_say(text, lang=None):
-    """Speak text in the correct language."""
+    """Speak text in the correct language. Auto-reconnects on module loss."""
     if not tts_proxy:
         return
     if lang is None:
         lang = current_lang
-    try:
+    payload = text.encode("utf-8") if isinstance(text, bytes) is False else text
+
+    def _do_say(proxy):
         if lang == "ar":
-            tts_proxy.setLanguage("Arabic")
+            proxy.setLanguage("Arabic")
         else:
-            tts_proxy.setLanguage("English")
-        tts_proxy.say(text.encode("utf-8") if isinstance(text, bytes) is False else text)
+            proxy.setLanguage("English")
+        proxy.say(payload)
+
+    try:
+        _do_say(tts_proxy)
     except Exception as e:
-        print("[WARN] TTS failed: " + str(e))
+        print("[WARN] TTS failed: " + _ascii(e))
+        if _is_destroyed(e):
+            _reconnect_robot_proxies()
+            try:
+                if tts_proxy:
+                    _do_say(tts_proxy)
+            except Exception as e2:
+                print("[WARN] TTS retry failed: " + _ascii(e2))
 
 
 # =====================================================================
@@ -130,6 +221,14 @@ def _startup_greeting():
         tts_proxy.say("Hello! I am Pepper, your medical assistant at Andalusia Hospital. "
                       "You can talk to me, or use the touchscreen to get started. "
                       "I am here to help!".encode("utf-8"))
+
+        time.sleep(0.3)
+        tts_proxy.setLanguage("Arabic")
+        time.sleep(0.2)
+        tts_proxy.say(u"\u0645\u0631\u062d\u0628\u0627\u064b! \u0623\u0646\u0627 \u0628\u064a\u0628\u0631\u060c "
+                      u"\u0645\u0633\u0627\u0639\u062f\u0643 \u0627\u0644\u0637\u0628\u064a \u0641\u064a \u0645\u0633\u062a\u0634\u0641\u0649 \u0627\u0644\u0623\u0646\u062f\u0644\u0633. "
+                      u"\u064a\u0645\u0643\u0646\u0643 \u0627\u0644\u062a\u062d\u062f\u062b \u0645\u0639\u064a \u0623\u0648 \u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0627\u0644\u0634\u0627\u0634\u0629. "
+                      u"\u0623\u0646\u0627 \u0647\u0646\u0627 \u0644\u0645\u0633\u0627\u0639\u062f\u062a\u0643!".encode("utf-8"))
 
         motion_proxy.setAngles(names, [1.5, 0.1, 0.5, 0.0], 0.15)
         time.sleep(0.5)
@@ -252,7 +351,14 @@ def show_navigating_screen(doctor_name, room_name):
         print("[TABLET] Showing navigation screen: " + url)
         tablet_proxy.loadUrl(url)
     except Exception as e:
-        print("[TABLET] Could not show navigation screen: " + str(e))
+        print("[TABLET] Could not show navigation screen: " + _ascii(e))
+        if _is_destroyed(e):
+            _reconnect_robot_proxies()
+            try:
+                if tablet_proxy:
+                    tablet_proxy.loadUrl(url)
+            except Exception as e2:
+                print("[TABLET] Retry failed: " + _ascii(e2))
 
 
 def restore_home_screen():
@@ -263,7 +369,9 @@ def restore_home_screen():
         tablet_proxy.loadUrl(SERVER_URL)
         print("[TABLET] Restored home screen.")
     except Exception as e:
-        print("[TABLET] Could not restore home screen: " + str(e))
+        print("[TABLET] Could not restore home screen: " + _ascii(e))
+        if _is_destroyed(e):
+            _reconnect_robot_proxies()
 
 
 # =====================================================================
@@ -386,7 +494,11 @@ def _navigate_segment(dx, dy, use_nav=True):
             raise RuntimeError("Skipping navigateTo — using moveTo fallback")
     except Exception as e:
         if not timed_out[0]:
-            print("[NAV]   navigateTo failed: {}. Trying moveTo...".format(str(e)))
+            err_s = _ascii(e)
+            print("[NAV]   navigateTo failed: {}. Trying moveTo...".format(err_s))
+            # If the session was reclaimed mid-call, rebuild proxies first
+            if _is_destroyed(e):
+                _reconnect_robot_proxies()
             timer.cancel()
             # Reset timeout for moveTo attempt
             timed_out[0] = False
@@ -397,7 +509,14 @@ def _navigate_segment(dx, dy, use_nav=True):
                 motion_proxy.moveTo(dx, dy, 0)
                 success = not timed_out[0]
             except Exception as e2:
-                print("[NAV]   moveTo also failed: " + str(e2))
+                print("[NAV]   moveTo also failed: " + _ascii(e2))
+                if _is_destroyed(e2):
+                    _reconnect_robot_proxies()
+                    try:
+                        motion_proxy.moveTo(dx, dy, 0)
+                        success = not timed_out[0]
+                    except Exception as e3:
+                        print("[NAV]   moveTo retry failed: " + _ascii(e3))
     finally:
         timer.cancel()
 
@@ -423,6 +542,12 @@ def execute_navigation(target_coords, doctor_name, room_name):
         ttheta = float(target_coords[2])
 
         _slog_nav("navigation_started", destination=room_name, doctor=doctor_name)
+
+        # CRITICAL: refresh proxies if the NAOqi session went stale while idle.
+        # Without this, the first nav after a few minutes of inactivity fails
+        # with 'module destroyed' on every NAOqi call.
+        if not _ensure_proxies_alive():
+            raise RuntimeError("Could not re-establish NAOqi session with robot.")
 
         # Show navigation screen on tablet
         show_navigating_screen(doctor_name, room_name)
@@ -534,9 +659,12 @@ def execute_navigation(target_coords, doctor_name, room_name):
         restore_home_screen()
 
     except Exception as e:
-        print("[ERROR] Navigation failed: " + str(e))
+        err_str = _ascii(e)
+        print("[ERROR] Navigation failed: " + err_str)
         _slog_nav("navigation_failed", destination=room_name, success=False,
-                  elapsed_s=time.time() - _nav_start_time, reason=str(e), doctor=doctor_name)
+                  elapsed_s=time.time() - _nav_start_time, reason=err_str, doctor=doctor_name)
+        if _is_destroyed(e):
+            _reconnect_robot_proxies()
 
         # Safety: stop all movement
         try:
@@ -676,6 +804,13 @@ def run():
                         try:
                             with open(LANG_FLAG_FILE, "w") as _lf:
                                 _lf.write(lang)
+                        except Exception:
+                            pass
+                        user_id_val = data.get("user_id", "")
+                        try:
+                            user_flag = os.path.join(VOICE_DIR, "user.flag")
+                            with open(user_flag, "w") as _uf:
+                                _uf.write(str(user_id_val) if user_id_val else "")
                         except Exception:
                             pass
                         try:

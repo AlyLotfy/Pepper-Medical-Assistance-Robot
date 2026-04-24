@@ -174,47 +174,59 @@
       btn.textContent = I18N.t('booking_dots');
       setMsg(msg, '');
 
-      var resp = null;
-      try { resp = STORE.book(doctorName, dateVal, timeVal); }
-      catch (e3) { resp = { success: false, error: 'Storage error' }; }
+      fetch('/api/book_appointment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doctor_name: doctorName, date: dateVal, time_slot: timeVal })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        btn.disabled = false;
+        btn.textContent = I18N.t('confirm_booking');
 
-      btn.disabled = false;
-      btn.textContent = I18N.t('confirm_booking');
+        // Also sync to localStorage so staff dashboard & appointments page see it immediately
+        try { STORE.book(doctorName, dateVal, timeVal); } catch(e) {}
 
-      if (resp && resp.success) {
-        setStep(4);
-        setMsg(msg, I18N.t('appointment_confirmed'), 'green');
+        if (resp && resp.success) {
+          setStep(4);
+          setMsg(msg, I18N.t('appointment_confirmed'), 'green');
 
-        try {
-          var me = (window.STORE && STORE.me) ? STORE.me() : null;
-          if (me && me.id) localStorage.setItem('hasNewAppointments_' + me.id, '1');
-        } catch (eFlag) {}
+          try {
+            var me = (window.STORE && STORE.me) ? STORE.me() : null;
+            if (me && me.id) localStorage.setItem('hasNewAppointments_' + me.id, '1');
+          } catch (eFlag) {}
 
-        /* Real-time sync: notify staff dashboards via WebSocket */
-        try {
-          var wsHost = window.location.hostname || '127.0.0.1';
-          var notifyWs = new WebSocket('ws://' + wsHost + ':8765');
-          notifyWs.onopen = function () {
-            notifyWs.send(JSON.stringify({
-              type: 'appointment_booked',
-              doctor: doctorName,
-              date: dateVal,
-              time: timeVal,
-              patient: patientName
-            }));
-            setTimeout(function () { notifyWs.close(); }, 500);
-          };
-        } catch (wsErr) {}
+          /* Real-time sync: notify staff dashboards via WebSocket */
+          try {
+            var wsHost = window.location.hostname || '127.0.0.1';
+            var notifyWs = new WebSocket('ws://' + wsHost + ':8765');
+            notifyWs.onopen = function () {
+              notifyWs.send(JSON.stringify({
+                type: 'appointment_booked',
+                doctor: doctorName,
+                date: dateVal,
+                time: timeVal,
+                patient: patientName
+              }));
+              setTimeout(function () { notifyWs.close(); }, 500);
+            };
+          } catch (wsErr) {}
 
-        var keepName = patientName;
-        form.reset();
-        nameInput.value = keepName;
-        docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_dept_first') + '</option>';
-        docSelect.disabled = true;
-        setTimeout(function () { setStep(1); }, 1500);
-      } else {
-        setMsg(msg, I18N.t('booking_failed', (resp && resp.error) || 'Unknown error'), '#d9534f');
-      }
+          var keepName = patientName;
+          form.reset();
+          nameInput.value = keepName;
+          docSelect.innerHTML = '<option value="" disabled selected>' + I18N.t('select_dept_first') + '</option>';
+          docSelect.disabled = true;
+          setTimeout(function () { setStep(1); }, 1500);
+        } else {
+          setMsg(msg, I18N.t('booking_failed', (resp && resp.error) || 'Unknown error'), '#d9534f');
+        }
+      })
+      .catch(function() {
+        btn.disabled = false;
+        btn.textContent = I18N.t('confirm_booking');
+        setMsg(msg, I18N.t('booking_failed', 'Network error'), '#d9534f');
+      });
     });
   });
   </script>

@@ -442,6 +442,104 @@
         0.0,
         0.0
       ]
+    },
+    {
+      "id": 41,
+      "name": "Emergency Department",
+      "facility": "Emergency Room",
+      "room_name": "Emergency - Ground Floor",
+      "coordinates": [0.1, 0.5, 0.0]
+    },
+    {
+      "id": 42,
+      "name": "Pharmacy",
+      "facility": "Pharmacy",
+      "room_name": "Pharmacy - Ground Floor",
+      "coordinates": [0.2, 0.3, 0.0]
+    },
+    {
+      "id": 43,
+      "name": "Laboratory",
+      "facility": "Laboratory",
+      "room_name": "Laboratory - Ground Floor",
+      "coordinates": [0.3, 0.8, 0.0]
+    },
+    {
+      "id": 44,
+      "name": "Radiology Imaging",
+      "facility": "Radiology",
+      "room_name": "Radiology Suite - Ground Floor",
+      "coordinates": [0.4, 1.2, 0.0]
+    },
+    {
+      "id": 45,
+      "name": "Cafeteria",
+      "facility": "Cafeteria",
+      "room_name": "Cafeteria - Ground Floor",
+      "coordinates": [0.2, 2.5, 0.0]
+    },
+    {
+      "id": 46,
+      "name": "Restroom Ground Floor",
+      "facility": "Restroom",
+      "room_name": "Restroom - Ground Floor",
+      "coordinates": [0.15, 0.2, 0.0]
+    },
+    {
+      "id": 47,
+      "name": "Restroom First Floor",
+      "facility": "Restroom",
+      "room_name": "Restroom - First Floor",
+      "coordinates": [1.15, 0.2, 0.0]
+    },
+    {
+      "id": 48,
+      "name": "ICU",
+      "facility": "Intensive Care Unit",
+      "room_name": "ICU - Second Floor",
+      "coordinates": [2.05, 0.5, 0.0]
+    },
+    {
+      "id": 49,
+      "name": "Maternity Ward",
+      "facility": "Maternity Ward",
+      "room_name": "Maternity - Second Floor",
+      "coordinates": [2.35, 3.0, 0.0]
+    },
+    {
+      "id": 50,
+      "name": "Operating Theatres",
+      "facility": "Operating Theatres",
+      "room_name": "Operating Theatres - Third Floor",
+      "coordinates": [3.5, 0.5, 0.0]
+    },
+    {
+      "id": 51,
+      "name": "Blood Bank",
+      "facility": "Blood Bank",
+      "room_name": "Blood Bank - Ground Floor",
+      "coordinates": [0.5, 1.5, 0.0]
+    },
+    {
+      "id": 52,
+      "name": "Waiting Area",
+      "facility": "Waiting Area",
+      "room_name": "Main Waiting Area - Ground Floor",
+      "coordinates": [0.05, 0.1, 0.0]
+    },
+    {
+      "id": 53,
+      "name": "Billing Office",
+      "facility": "Billing",
+      "room_name": "Billing Office - Ground Floor",
+      "coordinates": [0.05, 0.4, 0.0]
+    },
+    {
+      "id": 54,
+      "name": "Elevators",
+      "facility": "Elevators",
+      "room_name": "Elevator Bank - Ground Floor",
+      "coordinates": [0.1, 0.05, 0.0]
     }
   ]
 }

@@ -29,10 +29,10 @@ except ImportError:
 
 try:
     import mediapipe as mp
-    _MP_AVAILABLE = True
     _mp_pose = mp.solutions.pose
     _mp_pose_landmark = mp.solutions.pose.PoseLandmark
-except ImportError:
+    _MP_AVAILABLE = True
+except (ImportError, AttributeError):
     _MP_AVAILABLE = False
 
 # Pepper camera URL (fallback when no local camera)

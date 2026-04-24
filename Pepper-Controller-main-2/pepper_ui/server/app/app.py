@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, session, make_response, Response
 from flask_sqlalchemy import SQLAlchemy
-from datetime import time, datetime, date as date_type
+from datetime import time as time_type, datetime, date as date_type, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from rag_engine import RAGEngine
 from emotion_detector import EmotionDetector
@@ -30,6 +30,10 @@ from ai_modules.medication_reminder import MedicationReminderManager
 from ai_modules.translator import Translator
 from ai_modules.wait_estimator import WaitEstimator
 from ai_modules.symptom_progression import SymptomProgressionTracker
+from ai_modules.acoustic_analyzer import AcousticAnalyzer
+from ai_modules.pose_analyzer import PoseAnalyzer
+from ai_modules.multi_agent import MultiAgentClinicalSystem
+from ai_modules.clinical_predictor import ReadmissionRiskPredictor, DynamicWaitEstimator
 
 # ====== Load .env file ======
 def _load_env():
@@ -90,9 +94,73 @@ def serve_qimessaging():
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "pepper_medical_secret_key_99")
 
 # ====== Initialize Whisper (faster-whisper with CTranslate2) ======
-print("[INFO] Loading Whisper Model (this may take a moment)...")
-audio_model = WhisperModel("base", device="cpu", compute_type="int8")
-print("[INFO] Whisper Model Loaded (faster-whisper, int8 quantized).")
+# Auto-detects CUDA; falls back to CPU automatically.
+# Config keys in config.json (all optional):
+#   WHISPER_MODEL        : tiny|base|small|medium|large-v2|large-v3  (default: medium)
+#   WHISPER_DEVICE       : auto|cuda|cpu                              (default: auto)
+#   WHISPER_COMPUTE_TYPE : float16|int8_float16|int8                  (default: auto)
+#   WHISPER_CPU_THREADS  : int                                         (default: 4)
+#
+# GPU speed on 6-second audio: medium ~1 s | large-v3 ~3 s
+# CPU speed on 6-second audio: medium ~12 s | large-v3 ~30 s
+_cfg_path = Path(__file__).resolve().parents[3] / "config.json"
+try:
+    with open(_cfg_path) as _cf:
+        _launcher_cfg = json.load(_cf)
+except Exception:
+    _launcher_cfg = {}
+
+_WHISPER_MODEL   = _launcher_cfg.get("WHISPER_MODEL", "medium")
+_WHISPER_THREADS = int(_launcher_cfg.get("WHISPER_CPU_THREADS", 4))
+
+# Auto-detect CUDA via CTranslate2 (the actual inference backend —
+# does NOT require a CUDA-enabled PyTorch build).
+_cfg_device = _launcher_cfg.get("WHISPER_DEVICE", "auto").lower()
+try:
+    import ctranslate2 as _ct2
+    _cuda_ok = _ct2.get_cuda_device_count() > 0
+except Exception:
+    _cuda_ok = False
+
+if _cfg_device == "auto":
+    _WHISPER_DEVICE = "cuda" if _cuda_ok else "cpu"
+else:
+    _WHISPER_DEVICE = _cfg_device
+
+# Pick the best compute type for the device unless overridden.
+# int8_float16 on GPU: ~40% less VRAM than float16, negligible accuracy loss.
+_cfg_compute = _launcher_cfg.get("WHISPER_COMPUTE_TYPE", "auto").lower()
+if _cfg_compute == "auto":
+    if _WHISPER_DEVICE == "cuda":
+        _WHISPER_COMPUTE_TYPE = "int8_float16"  # memory-efficient GPU mode
+    else:
+        _WHISPER_COMPUTE_TYPE = "int8"          # smallest footprint on CPU
+else:
+    _WHISPER_COMPUTE_TYPE = _cfg_compute
+
+print(f"[INFO] Loading Whisper Model ({_WHISPER_MODEL}, device={_WHISPER_DEVICE}, compute={_WHISPER_COMPUTE_TYPE})...")
+try:
+    audio_model = WhisperModel(
+        _WHISPER_MODEL,
+        device=_WHISPER_DEVICE,
+        compute_type=_WHISPER_COMPUTE_TYPE,
+        cpu_threads=_WHISPER_THREADS,
+        num_workers=1,
+    )
+    print(f"[INFO] Whisper Model Loaded ({_WHISPER_MODEL} on {_WHISPER_DEVICE}).")
+except Exception as _we:
+    # GPU init failed (driver mismatch, OOM, etc.) — retry on CPU with int8
+    print(f"[WARN] Whisper GPU init failed ({_we}), retrying on CPU int8...")
+    _WHISPER_DEVICE       = "cpu"
+    _WHISPER_COMPUTE_TYPE = "int8"
+    audio_model = WhisperModel(
+        _WHISPER_MODEL,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=_WHISPER_THREADS,
+        num_workers=1,
+    )
+    print(f"[INFO] Whisper Model Loaded ({_WHISPER_MODEL} on CPU int8 fallback).")
 
 SERVER_START_TIME = time.time()
 
@@ -129,16 +197,26 @@ print(f"[INFO] Emotion Detector ready: {emotion_detector.status()}")
 
 # ====== Initialize AI Modules ======
 print("[INFO] Initializing AI Modules...")
-sentiment_analyzer = SentimentAnalyzer()
-medical_ner        = MedicalNER()
-symptom_checker    = SymptomChecker()
-face_auth          = FaceAuth()
+sentiment_analyzer  = SentimentAnalyzer()
+medical_ner         = MedicalNER()
+symptom_checker     = SymptomChecker()
+face_auth           = FaceAuth()
 print(f"[INFO] Face Auth status: {face_auth.status()}")
-fall_detector      = FallDetector()
-translator         = Translator()
-vital_analyzer     = VitalAnalyzer()
+fall_detector       = FallDetector()
+translator          = Translator()
+vital_analyzer      = VitalAnalyzer()
 print(f"[INFO] Fall Detector ready: {fall_detector.status()}")
 print(f"[INFO] Translator ready: {translator.status()}")
+# New AI modules
+acoustic_analyzer   = AcousticAnalyzer()
+pose_analyzer       = PoseAnalyzer()
+multi_agent_system  = MultiAgentClinicalSystem()
+readmission_predictor = ReadmissionRiskPredictor()
+dynamic_wait_estimator = DynamicWaitEstimator()
+print(f"[INFO] Acoustic Analyzer ready: {acoustic_analyzer.status()}")
+print(f"[INFO] Pose Analyzer ready: {pose_analyzer.status()}")
+print(f"[INFO] Readmission Predictor ready: {readmission_predictor.status()}")
+print(f"[INFO] Dynamic Wait Estimator ready: {dynamic_wait_estimator.status()}")
 # ConversationMemory, DrugChecker, MedicationReminderManager, WaitEstimator,
 # SymptomProgressionTracker are instantiated per-request (they need db + models)
 
@@ -842,14 +920,480 @@ def setup_database(app):
                 # Create Default Schedules
                 for doc in Doctor.query.all():
                     # Mon 9-1, Wed 2-5
-                    db.session.add(Schedule(doctor_id=doc.id, day_of_week=0, start_time=time(9,0), end_time=time(13,0)))
-                    db.session.add(Schedule(doctor_id=doc.id, day_of_week=2, start_time=time(14,0), end_time=time(17,0)))
+                    db.session.add(Schedule(doctor_id=doc.id, day_of_week=0, start_time=time_type(9,0), end_time=time_type(13,0)))
+                    db.session.add(Schedule(doctor_id=doc.id, day_of_week=2, start_time=time_type(14,0), end_time=time_type(17,0)))
                 
                 db.session.commit()
                 print("Database populated successfully.")
             except Exception as e:
                 print(f"[ERROR] Database population failed: {e}")
                 db.session.rollback()
+
+        # ── Seed Realistic Doctor Schedules ──────────────────────────────────
+        if Schedule.query.count() <= Doctor.query.count() * 2:
+            print("[DB] Seeding realistic doctor schedules...")
+            try:
+                # Remove generic Mon/Wed-only schedules and add specialty-appropriate ones
+                Schedule.query.delete()
+                _sched_patterns = [
+                    # (day_of_week, start_h, end_h)
+                    (6, 9, 14), (0, 9, 14), (1, 14, 18), (3, 9, 14), (4, 14, 18),   # pattern A
+                    (6, 10, 15), (1, 9, 13), (2, 14, 18), (4, 9, 13),               # pattern B
+                    (6, 8, 13), (0, 14, 18), (2, 9, 14), (3, 14, 18),               # pattern C
+                    (6, 9, 13), (0, 14, 17), (1, 9, 13), (3, 14, 18), (4, 9, 14),   # pattern D
+                    (6, 10, 14), (1, 10, 15), (2, 9, 13), (4, 14, 18),              # pattern E
+                ]
+                _patterns = [
+                    _sched_patterns[0:5], _sched_patterns[5:9],
+                    _sched_patterns[9:13], _sched_patterns[13:18], _sched_patterns[18:22],
+                ]
+                for doc in Doctor.query.all():
+                    pat = _patterns[doc.id % len(_patterns)]
+                    for (dow, sh, eh) in pat:
+                        db.session.add(Schedule(doctor_id=doc.id, day_of_week=dow, start_time=time_type(sh, 0), end_time=time_type(eh, 0)))
+                db.session.commit()
+                print(f"[DB] Seeded schedules for {Doctor.query.count()} doctors.")
+            except Exception as _e:
+                print(f"[DB] Schedule seeding error: {_e}")
+                db.session.rollback()
+
+        # ── Seed Vital Records ───────────────────────────────────────────────
+        if VitalRecord.query.count() == 0:
+            print("[DB] Seeding vital records...")
+            import random as _rnd
+            _rnd.seed(42)
+            _now = datetime.now()
+            _vitals = []
+
+            # Per-patient vital profiles keyed by patient_id
+            # Format: (base_sys, base_dia, base_hr, base_o2, base_rr, base_temp, base_glucose, base_pain, weight, height, notes_pool)
+            _profiles = {
+                100: (145, 88, 78, 97.0, 16, 36.8, 8.2,  2, 88, 175, ["BP slightly elevated", "Glucose needs tighter control", "Stable on current meds"]),
+                101: (115, 72, 72, 98.5, 14, 36.6, 5.1,  0, 62, 165, ["Lung sounds clear", "Asthma well-controlled", "Peak flow normal"]),
+                102: (132, 80, 62, 96.5, 16, 36.7, 5.5,  1, 78, 172, ["Heart rate well-controlled on bisoprolol", "INR 2.4 - within range", "Irregular pulse (AF)"]),
+                103: (118, 74, 70, 99.0, 14, 36.5, 5.0,  0, 75, 180, ["Healthy young adult", "Mild seasonal congestion", "All vitals normal"]),
+                104: (122, 78, 76, 98.0, 15, 36.6, 5.3,  5, 85, 178, ["Back pain 5/10 today", "Pain radiating to left leg", "Mobility improving with PT"]),
+                105: (130, 82, 74, 97.5, 15, 36.7, 5.4,  4, 68, 160, ["Joint stiffness in hands", "Thyroid levels stable", "Weight stable"]),
+                106: (112, 70, 80, 99.0, 14, 36.5, 12.5, 0, 70, 176, ["Glucose elevated post-meal", "Insulin pump functioning", "No hypo episodes this week"]),
+                107: (118, 75, 82, 98.5, 14, 36.6, 5.2,  6, 64, 163, ["Migraine episode yesterday", "Aura reported", "Pain 6/10 during episode"]),
+                108: (138, 85, 70, 92.0, 20, 36.8, 5.6,  2, 82, 170, ["O2 sat borderline", "Mild expiratory wheeze", "COPD stable on tiotropium"]),
+                109: (100, 65, 90, 99.0, 18, 36.5, 4.8,  0, 28, 128, ["Pediatric vitals normal", "No seizure activity", "Alert and oriented"]),
+                110: (148, 90, 72, 97.0, 16, 36.7, 5.8,  3, 90, 174, ["BP above target", "eGFR stable at 42", "Gout flare resolved"]),
+                111: (116, 74, 76, 98.5, 14, 36.6, 6.0,  1, 82, 164, ["Insulin resistance noted", "Weight management ongoing", "Vitals stable"]),
+                112: (120, 76, 78, 98.0, 15, 36.7, 5.2,  2, 76, 175, ["GI symptoms improved", "Anxiety managed", "GERD controlled on PPI"]),
+                113: (118, 74, 80, 98.0, 15, 36.6, 5.1,  3, 65, 162, ["Post-mastectomy stable", "Lymphedema mild", "No new symptoms"]),
+                114: (110, 68, 74, 98.5, 14, 36.7, 5.0,  4, 72, 177, ["Mild abdominal tenderness", "Crohn's partially controlled", "Weight stable"]),
+                115: (152, 92, 76, 97.0, 16, 36.8, 5.7,  6, 105, 162, ["BP poorly controlled", "Knee pain bilateral 6/10", "Weight unchanged"]),
+                116: (124, 78, 72, 97.5, 15, 36.7, 5.3,  1, 84, 176, ["Liver enzymes stable", "No jaundice", "Diet compliance good"]),
+                117: (108, 68, 78, 98.0, 14, 36.6, 5.1,  2, 58, 160, ["SLE stable", "Renal function preserved", "Mild joint pain"]),
+                118: (105, 62, 68, 97.5, 15, 36.7, 5.4,  3, 74, 172, ["Orthostatic BP drop noted", "Tremor stable", "Gait steady with walker"]),
+                119: (108, 68, 82, 98.5, 14, 36.5, 4.9,  2, 55, 162, ["Mild pallor noted", "Hb improving on iron", "Fatigue reducing"]),
+                120: (142, 88, 74, 94.0, 16, 36.8, 5.5,  1, 120, 180, ["Daytime SpO2 borderline", "CPAP compliance improving", "Neck circumference 44cm"]),
+                121: (128, 78, 72, 95.0, 18, 36.7, 7.8,  3, 72, 158, ["Mild peripheral edema", "Weight up 1kg from last visit", "Lungs: bibasilar crackles"]),
+                122: (118, 72, 74, 98.5, 14, 36.6, 5.0,  1, 78, 180, ["MS stable", "No new neurological deficits", "Vision normal"]),
+                123: (114, 72, 78, 98.5, 14, 36.6, 5.2,  2, 60, 165, ["Thyroid stable on levothyroxine", "Mood improved", "IBS symptoms moderate"]),
+                124: (136, 82, 68, 96.5, 16, 36.7, 5.6,  0, 70, 168, ["Oriented x1 (person only)", "Caregiver reports wandering", "PSA stable"]),
+                125: (125, 78, 96, 98.5, 16, 36.8, 5.3,  1, 62, 164, ["Resting tachycardia (thyroid)", "Thyroid levels improving", "Tremor mild"]),
+                126: (140, 86, 76, 97.0, 16, 36.7, 9.5,  3, 88, 176, ["Claudication at 200m walking", "Glucose poorly controlled", "Foot pulses diminished"]),
+                127: (112, 70, 76, 98.5, 14, 36.6, 5.1,  5, 66, 166, ["Tender points positive", "Sleep quality poor", "Pain widespread 5/10"]),
+                128: (138, 84, 72, 97.5, 15, 36.7, 6.2,  4, 82, 174, ["Mild flank tenderness", "Urate 0.42 mmol/L", "Hydration adequate"]),
+                129: (110, 68, 78, 99.0, 15, 36.5, 4.9,  1, 52, 162, ["Scoliosis curve stable 28°", "No respiratory compromise", "Brace compliant"]),
+            }
+
+            _recorders = ["nurse", "robot", "patient"]
+            for pid, (s_bp, d_bp, hr, o2, rr, temp, glu, pain, wt, ht, notes_list) in _profiles.items():
+                n_records = _rnd.randint(5, 10)
+                for i in range(n_records):
+                    days_ago = _rnd.randint(1, 90)
+                    hour = _rnd.choice([8, 9, 10, 11, 14, 15, 16])
+                    rec_time = _now - timedelta(days=days_ago, hours=_rnd.randint(0, 3))
+                    rec_time = rec_time.replace(hour=hour, minute=_rnd.choice([0, 15, 30, 45]))
+
+                    v_sys = s_bp + _rnd.randint(-12, 12)
+                    v_dia = d_bp + _rnd.randint(-8, 8)
+                    v_hr  = hr  + _rnd.randint(-8, 8)
+                    v_o2  = round(min(100.0, o2 + _rnd.uniform(-1.5, 1.0)), 1)
+                    v_rr  = rr  + _rnd.randint(-2, 3)
+                    v_temp = round(temp + _rnd.uniform(-0.3, 0.5), 1)
+                    v_glu = round(glu + _rnd.uniform(-1.5, 2.5), 1)
+                    v_pain = max(0, min(10, pain + _rnd.randint(-2, 2)))
+
+                    alerts = []
+                    if v_sys >= 140 or v_dia >= 90:
+                        alerts.append("Hypertension alert")
+                    if v_o2 < 94:
+                        alerts.append("Low oxygen saturation")
+                    if v_hr > 100:
+                        alerts.append("Tachycardia")
+                    if v_hr < 50:
+                        alerts.append("Bradycardia")
+                    if v_glu > 11.0:
+                        alerts.append("Hyperglycemia")
+                    if v_temp >= 37.5:
+                        alerts.append("Low-grade fever")
+                    if v_pain >= 7:
+                        alerts.append("Significant pain")
+
+                    _vitals.append(VitalRecord(
+                        patient_id=pid, recorded_at=rec_time,
+                        recorded_by=_rnd.choice(_recorders),
+                        pain_scale=v_pain, temperature=v_temp,
+                        systolic_bp=v_sys, diastolic_bp=v_dia,
+                        heart_rate=v_hr, oxygen_sat=v_o2,
+                        respiratory_rate=v_rr, blood_glucose=v_glu,
+                        weight_kg=round(wt + _rnd.uniform(-1, 1), 1),
+                        height_cm=ht,
+                        notes=_rnd.choice(notes_list),
+                        alerts=json.dumps(alerts) if alerts else None,
+                    ))
+
+            db.session.add_all(_vitals)
+            db.session.commit()
+            print(f"[DB] Seeded {len(_vitals)} vital records.")
+
+        # ── Seed Triage History ──────────────────────────────────────────────
+        if TriageHistory.query.count() == 0:
+            print("[DB] Seeding triage history...")
+            import random as _rnd
+            _rnd.seed(43)
+            _now = datetime.now()
+            _triage = []
+
+            _triage_data = [
+                # (patient_id, name, complaints)
+                # Each complaint: (chief_complaint, severity, severity_label, symptoms, dept, disposition, recommendation)
+                (100, "Ahmed Ali", [
+                    ("Dizziness and headache", 3, "Urgent", ["dizziness", "headache", "blurred vision"], "Cardiology", "discharged", "BP 162/95. Amlodipine dose increase recommended. Follow-up in 1 week."),
+                    ("Routine diabetes follow-up", 5, "Non-urgent", ["fatigue", "increased thirst"], "Internal Medicine", "discharged", "HbA1c 7.2%. Continue current regimen. Dietary counseling provided."),
+                    ("Chest tightness during exercise", 2, "Emergent", ["chest tightness", "shortness of breath", "sweating"], "Cardiology", "admitted", "ECG normal sinus. Troponin negative. Stress test ordered."),
+                ]),
+                (101, "Sara Hassan", [
+                    ("Acute asthma exacerbation", 2, "Emergent", ["wheezing", "shortness of breath", "chest tightness", "cough"], "Pulmonology", "discharged", "Peak flow 65%. Nebulizer given. Prednisolone 5-day course. Step-up preventer."),
+                    ("Allergic rhinitis flare", 4, "Less urgent", ["sneezing", "nasal congestion", "itchy eyes", "runny nose"], "ENT", "discharged", "Seasonal flare. Antihistamine added. Nasal spray continued."),
+                ]),
+                (102, "Mohamed Ibrahim", [
+                    ("Palpitations and dizziness", 2, "Emergent", ["palpitations", "dizziness", "fatigue", "irregular heartbeat"], "Cardiology", "admitted", "AF with rapid ventricular response (HR 132). Bisoprolol dose increased. INR 2.1."),
+                    ("Bruising on forearms", 3, "Urgent", ["easy bruising", "fatigue"], "Hematology", "discharged", "INR 3.8 - supratherapeutic. Warfarin held for 2 days. Recheck in 3 days."),
+                    ("Routine cardiology follow-up", 5, "Non-urgent", ["none"], "Cardiology", "discharged", "Stable on current regimen. INR 2.4. Echo stable. Continue current meds."),
+                ]),
+                (104, "Omar Nabil", [
+                    ("Severe back pain radiating to leg", 3, "Urgent", ["lower back pain", "leg numbness", "difficulty walking", "sciatica"], "Orthopedics", "discharged", "No red flags. Pregabalin dose adjusted. Physiotherapy intensified."),
+                    ("Depressed mood and insomnia", 3, "Urgent", ["low mood", "insomnia", "loss of appetite", "fatigue"], "Psychiatry", "discharged", "Sertraline dose increased to 100mg. Sleep hygiene counseling. Follow-up in 2 weeks."),
+                ]),
+                (105, "Nadia Salem", [
+                    ("Joint swelling in hands", 3, "Urgent", ["joint swelling", "morning stiffness", "pain in fingers", "reduced grip"], "Rheumatology", "discharged", "RA flare. ESR elevated. Short course prednisolone. Rheumatology follow-up."),
+                    ("Fatigue and cold intolerance", 4, "Less urgent", ["fatigue", "cold intolerance", "weight gain", "dry skin"], "Endocrinology", "discharged", "TSH 8.2 - hypothyroid. Levothyroxine increased to 100mcg. Recheck in 6 weeks."),
+                ]),
+                (106, "Karim Farouk", [
+                    ("Hypoglycemic episode", 2, "Emergent", ["sweating", "tremor", "confusion", "hunger", "palpitations"], "Endocrinology", "discharged", "BG 2.8 mmol/L. Glucose given. Insulin dose adjusted. CGM review done."),
+                    ("Abdominal pain after eating", 4, "Less urgent", ["abdominal pain", "bloating", "diarrhea"], "Gastroenterology", "discharged", "Likely celiac-related. Dietary review. Strict gluten-free diet reinforced."),
+                ]),
+                (108, "Youssef Adel", [
+                    ("Worsening breathlessness", 2, "Emergent", ["shortness of breath", "productive cough", "wheeze", "reduced exercise tolerance"], "Pulmonology", "admitted", "COPD exacerbation. SpO2 88%. Nebulizers, steroids, antibiotics started. Admission for monitoring."),
+                    ("Difficulty urinating", 4, "Less urgent", ["urinary hesitancy", "weak stream", "nocturia", "incomplete voiding"], "Urology", "discharged", "BPH symptoms worsening. Tamsulosin continued. Urology referral for flow study."),
+                ]),
+                (109, "Mariam Tarek", [
+                    ("Brief staring episode at school", 3, "Urgent", ["staring spell", "unresponsiveness", "lip smacking"], "Pediatric Neurology", "discharged", "Possible absence seizure breakthrough. Valproate level sub-therapeutic. Dose increased."),
+                ]),
+                (110, "Hassan Mostafa", [
+                    ("Swollen painful big toe", 3, "Urgent", ["joint pain", "swelling", "redness", "warmth in toe"], "Rheumatology", "discharged", "Acute gout flare. Colchicine given. Febuxostat continued. Renal function checked."),
+                    ("Elevated creatinine on labs", 3, "Urgent", ["fatigue", "reduced urine output", "nausea"], "Nephrology", "discharged", "eGFR dropped to 38. Medication review. Nephrology follow-up expedited."),
+                ]),
+                (115, "Noura Bassem", [
+                    ("Knee pain and swelling", 3, "Urgent", ["knee pain", "joint swelling", "difficulty walking", "crepitus"], "Orthopedics", "discharged", "Severe bilateral OA. Joint aspiration done. Steroid injection given. Surgical consult."),
+                    ("Headache and blurred vision", 2, "Emergent", ["headache", "blurred vision", "nausea"], "Emergency", "discharged", "BP 185/105. Hypertensive urgency. IV labetalol. Amlodipine dose maximized."),
+                ]),
+                (118, "Sherif Walid", [
+                    ("Increased tremor and falls", 3, "Urgent", ["tremor", "unsteady gait", "falls", "muscle rigidity"], "Neurology", "discharged", "PD progression. Levodopa timing adjusted. Falls prevention program. OT assessment."),
+                    ("Orthostatic dizziness", 3, "Urgent", ["dizziness on standing", "lightheadedness", "near-syncope"], "Neurology", "discharged", "Significant orthostatic drop (150/85 to 105/60). Fludrocortisone considered."),
+                ]),
+                (121, "Mona Sayed", [
+                    ("Worsening shortness of breath", 2, "Emergent", ["shortness of breath", "orthopnea", "leg swelling", "weight gain"], "Cardiology", "admitted", "HF decompensation. Weight up 3kg. IV furosemide. Fluid restriction reinforced."),
+                    ("Palpitations and fatigue", 3, "Urgent", ["palpitations", "fatigue", "dizziness"], "Cardiology", "discharged", "AF with controlled rate. Apixaban therapeutic. Echo unchanged EF 35%."),
+                    ("High blood sugar readings", 3, "Urgent", ["polyuria", "polydipsia", "fatigue"], "Endocrinology", "discharged", "BG averaging 14 mmol/L. Metformin dose increased. Dapagliflozin continued."),
+                ]),
+                (124, "Samy Lotfy", [
+                    ("Confusion and agitation", 3, "Urgent", ["confusion", "agitation", "wandering", "sleep disturbance"], "Neurology", "discharged", "Alzheimer's behavioral exacerbation. Memantine dose adjusted. Caregiver education."),
+                    ("Urinary retention", 3, "Urgent", ["inability to urinate", "lower abdominal pain", "discomfort"], "Urology", "discharged", "Catheterized. Residual 450ml. Prostate evaluation. Alpha-blocker started."),
+                ]),
+                (126, "Tarek Samy", [
+                    ("Leg pain when walking", 3, "Urgent", ["claudication", "leg pain", "numbness in feet", "cold feet"], "Vascular Surgery", "discharged", "ABI 0.65. Claudication worsening. Exercise program. Vascular referral expedited."),
+                    ("Foot ulcer not healing", 2, "Emergent", ["non-healing wound", "redness", "swelling", "discharge"], "Vascular Surgery", "admitted", "Diabetic foot ulcer Wagner grade 2. IV antibiotics. Wound care. Vascular assessment."),
+                ]),
+                (127, "Iman Rashid", [
+                    ("Widespread body pain", 3, "Urgent", ["widespread pain", "fatigue", "sleep disturbance", "brain fog"], "Rheumatology", "discharged", "Fibromyalgia flare. Pain score 7/10. Duloxetine increased. CBT referral."),
+                ]),
+                (129, "Salma Fathy", [
+                    ("Back pain and posture concerns", 4, "Less urgent", ["back pain", "postural asymmetry", "fatigue after standing"], "Orthopedics", "discharged", "Scoliosis curve 28°. No progression. Brace compliant. Continue physiotherapy."),
+                    ("Breathing difficulty during sports", 3, "Urgent", ["shortness of breath", "chest tightness", "cough after running"], "Pulmonology", "discharged", "Exercise-induced bronchoconstriction confirmed. Salbutamol 15 min pre-exercise."),
+                ]),
+            ]
+
+            for pid, pname, complaints in _triage_data:
+                for idx, (cc, sev, sev_label, symp, dept, disp, rec) in enumerate(complaints):
+                    days_ago = 80 - idx * 25 + _rnd.randint(-5, 5)
+                    assessed = _now - timedelta(days=max(1, days_ago))
+                    assessed = assessed.replace(hour=_rnd.choice([8, 9, 10, 11, 13, 14, 15]), minute=_rnd.randint(0, 59))
+
+                    v = {
+                        "heart_rate": 70 + _rnd.randint(-10, 30),
+                        "systolic_bp": 120 + _rnd.randint(-15, 40),
+                        "diastolic_bp": 75 + _rnd.randint(-10, 20),
+                        "oxygen_sat": round(96 + _rnd.uniform(-4, 3), 1),
+                        "temperature": round(36.6 + _rnd.uniform(-0.2, 1.0), 1),
+                        "respiratory_rate": 15 + _rnd.randint(-2, 6),
+                    }
+
+                    _triage.append(TriageHistory(
+                        patient_id=pid, patient_name=pname,
+                        assessed_at=assessed,
+                        chief_complaint=cc, severity=sev, severity_label=sev_label,
+                        symptoms_json=json.dumps(symp),
+                        vitals_json=json.dumps(v),
+                        ai_recommendation=rec,
+                        department_referred=dept, disposition=disp,
+                    ))
+
+            db.session.add_all(_triage)
+            db.session.commit()
+            print(f"[DB] Seeded {len(_triage)} triage history records.")
+
+        # ── Seed Symptom History ─────────────────────────────────────────────
+        if SymptomHistory.query.count() == 0:
+            print("[DB] Seeding symptom history...")
+            import random as _rnd
+            _rnd.seed(44)
+            _now = datetime.now()
+            _symptoms = []
+
+            _symptom_data = [
+                (100, [
+                    (["headache", "dizziness", "fatigue"], "moderate", "voice", "Felt dizzy after skipping medication"),
+                    (["thirst", "frequent urination", "blurred vision"], "mild", "chat", "Glucose running high this week"),
+                    (["chest discomfort", "shortness of breath"], "severe", "triage", "During morning walk, felt chest tightness"),
+                ]),
+                (101, [
+                    (["wheezing", "cough", "chest tightness"], "severe", "voice", "Asthma attack triggered by dust"),
+                    (["sneezing", "runny nose", "itchy eyes"], "mild", "chat", "Spring allergies acting up"),
+                ]),
+                (102, [
+                    (["palpitations", "dizziness", "fatigue"], "severe", "triage", "Heart racing, felt like skipping beats"),
+                    (["bruising", "nosebleed"], "moderate", "voice", "Easy bruising on arms, INR was high"),
+                ]),
+                (104, [
+                    (["lower back pain", "leg numbness", "sciatica"], "severe", "voice", "Pain shooting down left leg, can barely walk"),
+                    (["insomnia", "low mood", "loss of appetite"], "moderate", "chat", "Haven't slept well in weeks"),
+                    (["back stiffness", "reduced mobility"], "mild", "manual", "Morning stiffness improving with PT"),
+                ]),
+                (106, [
+                    (["sweating", "tremor", "confusion"], "severe", "triage", "Hypoglycemic episode at university"),
+                    (["bloating", "abdominal pain"], "mild", "chat", "Ate something with gluten accidentally"),
+                ]),
+                (108, [
+                    (["productive cough", "breathlessness", "wheeze"], "severe", "triage", "Cough worse for 3 days, yellow sputum"),
+                    (["fatigue", "reduced exercise tolerance"], "moderate", "voice", "Can't walk to the corner store anymore"),
+                ]),
+                (110, [
+                    (["joint pain", "swelling", "warmth"], "severe", "triage", "Big toe red and swollen overnight"),
+                    (["fatigue", "nausea", "reduced appetite"], "moderate", "chat", "Feeling unwell, labs showed high creatinine"),
+                ]),
+                (115, [
+                    (["knee pain", "joint stiffness", "crepitus"], "severe", "voice", "Can barely get up from chair"),
+                    (["headache", "blurred vision", "nausea"], "severe", "triage", "Worst headache of my life, vision blurry"),
+                ]),
+                (118, [
+                    (["tremor", "muscle rigidity", "slow movement"], "moderate", "voice", "Tremor worse in the mornings"),
+                    (["dizziness", "near-syncope"], "severe", "triage", "Almost fainted getting out of bed"),
+                ]),
+                (121, [
+                    (["shortness of breath", "leg swelling", "weight gain"], "severe", "triage", "Gained 3kg in a week, ankles very swollen"),
+                    (["fatigue", "palpitations"], "moderate", "voice", "Heart feels like it's fluttering"),
+                    (["thirst", "frequent urination", "fatigue"], "moderate", "chat", "Blood sugar readings very high"),
+                ]),
+                (126, [
+                    (["leg pain", "cramping", "cold feet"], "moderate", "voice", "Pain in calves when walking 100m"),
+                    (["foot wound", "redness", "discharge"], "severe", "triage", "Cut on foot not healing, looks infected"),
+                ]),
+                (127, [
+                    (["widespread pain", "fatigue", "brain fog"], "severe", "voice", "Everything hurts, can't concentrate"),
+                    (["sleep disturbance", "jaw pain", "headache"], "moderate", "chat", "TMJ acting up, grinding teeth at night"),
+                ]),
+            ]
+
+            for pid, entries in _symptom_data:
+                for idx, (syms, severity, source, ctx) in enumerate(entries):
+                    days_ago = 70 - idx * 20 + _rnd.randint(-5, 5)
+                    rec_at = _now - timedelta(days=max(1, days_ago))
+                    rec_at = rec_at.replace(hour=_rnd.choice([8, 9, 10, 14, 15, 16]), minute=_rnd.randint(0, 59))
+
+                    ner = [{"entity": s, "label": "SYMPTOM"} for s in syms]
+
+                    _symptoms.append(SymptomHistory(
+                        patient_id=pid, recorded_at=rec_at,
+                        symptoms=json.dumps(syms), severity=severity,
+                        ner_results=json.dumps(ner),
+                        context=ctx, source=source,
+                    ))
+
+            db.session.add_all(_symptoms)
+            db.session.commit()
+            print(f"[DB] Seeded {len(_symptoms)} symptom history records.")
+
+        # ── Seed Appointments ────────────────────────────────────────────────
+        if Appointment.query.count() < 5:
+            print("[DB] Seeding appointments...")
+            import random as _rnd
+            _rnd.seed(45)
+            _now = datetime.now()
+            _appts = []
+
+            # Map specialties to patient IDs who would see those doctors
+            _specialty_patients = {
+                "Cardiology": [(100, "Ahmed Ali"), (102, "Mohamed Ibrahim"), (121, "Mona Sayed")],
+                "Internal Medicine": [(100, "Ahmed Ali"), (116, "Tamer Essam")],
+                "Pulmonology": [(101, "Sara Hassan"), (108, "Youssef Adel"), (129, "Salma Fathy")],
+                "Orthopedics": [(104, "Omar Nabil"), (115, "Noura Bassem"), (129, "Salma Fathy")],
+                "Endocrinology": [(106, "Karim Farouk"), (123, "Yasmin Ashraf"), (125, "Hala Nasser")],
+                "Rheumatology": [(105, "Nadia Salem"), (110, "Hassan Mostafa"), (117, "Rania Gamal"), (127, "Iman Rashid")],
+                "Neurology": [(107, "Heba Mahmoud"), (118, "Sherif Walid"), (122, "George Hany"), (124, "Samy Lotfy")],
+                "Dermatology": [(111, "Aya Mohamed"), (103, "Aly Lotfy")],
+                "Gastroenterology": [(112, "Amr Sherif"), (114, "Khaled Hossam")],
+                "Urology": [(108, "Youssef Adel"), (128, "Wael Ibrahim"), (124, "Samy Lotfy")],
+                "Pediatrics": [(109, "Mariam Tarek")],
+                "Psychiatry": [(104, "Omar Nabil"), (107, "Heba Mahmoud")],
+                "Nephrology": [(110, "Hassan Mostafa")],
+                "Oncology": [(113, "Dina Wael")],
+                "Vascular Surgery": [(126, "Tarek Samy")],
+            }
+
+            doctors = Doctor.query.all()
+            doc_by_specialty = {}
+            for d in doctors:
+                spec = d.specialty or "General"
+                doc_by_specialty.setdefault(spec, []).append(d)
+
+            for spec, patients_list in _specialty_patients.items():
+                spec_docs = doc_by_specialty.get(spec, [])
+                if not spec_docs:
+                    continue
+                for pid, pname in patients_list:
+                    doc = _rnd.choice(spec_docs)
+                    # 2-4 appointments per patient-specialty pair
+                    n_appts = _rnd.randint(2, 4)
+                    for i in range(n_appts):
+                        # Mix of past and future appointments
+                        day_offset = _rnd.randint(-60, 30)
+                        appt_date = (_now + timedelta(days=day_offset)).date()
+                        hour = _rnd.choice([9, 10, 11, 12, 14, 15, 16])
+                        minute = _rnd.choice([0, 15, 30, 45])
+                        _appts.append(Appointment(
+                            doctor_id=doc.id,
+                            patient_id=pid,
+                            patient_name=pname,
+                            appointment_date=appt_date,
+                            time_slot=time_type(hour, minute),
+                        ))
+
+            db.session.add_all(_appts)
+            db.session.commit()
+            print(f"[DB] Seeded {len(_appts)} appointments.")
+
+        # ── Seed Medication Reminders ────────────────────────────────────────
+        if MedicationReminder.query.count() == 0:
+            print("[DB] Seeding medication reminders...")
+            _now = datetime.now()
+            _reminders = []
+
+            _reminder_data = [
+                # (patient_id, medication_name, dosage, frequency, times_json, notes)
+                (100, "Amlodipine", "5mg", "Once daily", '["08:00"]', "Take in the morning with water"),
+                (100, "Metformin", "500mg", "Twice daily", '["08:00","20:00"]', "Take with meals"),
+                (100, "Aspirin", "81mg", "Once daily", '["08:00"]', "Take with breakfast"),
+                (102, "Warfarin", "5mg", "Once daily", '["18:00"]', "Take at same time daily. INR monitoring required"),
+                (102, "Atorvastatin", "40mg", "Once daily", '["21:00"]', "Take at bedtime"),
+                (102, "Bisoprolol", "2.5mg", "Once daily", '["08:00"]', "Do not stop abruptly"),
+                (102, "Clopidogrel", "75mg", "Once daily", '["08:00"]', "Take with or without food"),
+                (104, "Pregabalin", "75mg", "Twice daily", '["08:00","20:00"]', "For nerve pain. May cause drowsiness"),
+                (104, "Sertraline", "50mg", "Once daily", '["08:00"]', "Takes 4-6 weeks for full effect"),
+                (105, "Hydroxychloroquine", "200mg", "Twice daily", '["08:00","20:00"]', "Take with meals. Annual eye exam required"),
+                (105, "Levothyroxine", "75mcg", "Once daily", '["06:30"]', "Take on empty stomach, 30 min before breakfast"),
+                (106, "Insulin Glargine", "Basal dose", "Once daily", '["22:00"]', "Same time each night. Do not mix with other insulin"),
+                (106, "Insulin Aspart", "Per carbs", "Three times daily", '["07:30","12:30","18:30"]', "Inject immediately before meals"),
+                (108, "Tiotropium", "1 puff", "Once daily", '["08:00"]', "HandiHaler. Rinse mouth after use"),
+                (110, "Losartan", "50mg", "Once daily", '["08:00"]', "Monitor potassium levels"),
+                (117, "Mycophenolate", "500mg", "Twice daily", '["08:00","20:00"]', "Immunosuppressant. Avoid live vaccines"),
+                (117, "Hydroxychloroquine", "200mg", "Once daily", '["08:00"]', "SLE maintenance therapy"),
+                (117, "Prednisolone", "5mg", "Once daily", '["08:00"]', "Do not stop abruptly. Take with food"),
+                (118, "Levodopa/Carbidopa", "100/25mg", "Three times daily", '["07:00","13:00","19:00"]', "Time doses carefully. Take 30 min before meals"),
+                (121, "Sacubitril/Valsartan", "50mg", "Twice daily", '["08:00","20:00"]', "Heart failure therapy. Monitor BP"),
+                (121, "Dapagliflozin", "10mg", "Once daily", '["08:00"]', "Stay hydrated. Watch for UTI signs"),
+                (121, "Furosemide", "40mg", "Once daily", '["08:00"]', "Take in morning. Weigh daily"),
+                (121, "Apixaban", "5mg", "Twice daily", '["08:00","20:00"]', "Anticoagulant. Report any unusual bleeding"),
+                (123, "Levothyroxine", "100mcg", "Once daily", '["06:30"]', "Empty stomach. 4h before calcium/iron"),
+                (123, "Fluoxetine", "20mg", "Once daily", '["08:00"]', "May take weeks for full benefit"),
+                (124, "Donepezil", "10mg", "Once daily", '["21:00"]', "For Alzheimer's. Take at bedtime"),
+                (124, "Memantine", "10mg", "Once daily", '["08:00"]', "Can be combined with donepezil"),
+                (125, "Carbimazole", "15mg", "Once daily", '["08:00"]', "If sore throat or fever, stop and check blood count immediately"),
+                (125, "Propranolol", "40mg", "Twice daily", '["08:00","20:00"]', "For palpitations. Do not stop abruptly"),
+                (126, "Metformin", "1000mg", "Twice daily", '["08:00","20:00"]', "Take with meals. Hold before contrast dye"),
+                (126, "Rosuvastatin", "20mg", "Once daily", '["21:00"]', "Check CK if muscle pain"),
+                (126, "Aspirin", "81mg", "Once daily", '["08:00"]', "Cardiovascular protection"),
+            ]
+
+            for pid, med, dose, freq, times_j, note in _reminder_data:
+                _reminders.append(MedicationReminder(
+                    patient_id=pid, medication_name=med,
+                    dosage=dose, frequency=freq,
+                    times=times_j, active=True,
+                    start_date=(_now - timedelta(days=90)).date(),
+                    notes=note,
+                ))
+
+            db.session.add_all(_reminders)
+            db.session.commit()
+            print(f"[DB] Seeded {len(_reminders)} medication reminders.")
+
+        # ── Seed Patient Memory (Conversation History) ───────────────────────
+        if PatientMemory.query.count() < 5:
+            print("[DB] Seeding patient conversation memory...")
+            _now = datetime.now()
+            _memories = []
+
+            _memory_data = [
+                (100, 5, "Ahmed is a 52-year-old male managing hypertension and Type 2 diabetes. He frequently asks about his blood pressure readings and glucose levels. Prefers Arabic language. Concerned about medication side effects.",
+                 '{"chronic_conditions": ["hypertension", "type 2 diabetes"], "concerns": ["medication side effects", "diet for diabetes"], "preferences": {"language": "ar", "communication": "simple explanations"}, "last_topics": ["blood pressure", "HbA1c results"]}'),
+                (101, 3, "Sara is a 34-year-old asthmatic who visits during seasonal flares. She is knowledgeable about her condition and asks specific questions about triggers and medication adjustments.",
+                 '{"chronic_conditions": ["asthma", "allergic rhinitis"], "concerns": ["trigger avoidance", "inhaler technique"], "preferences": {"language": "en"}, "last_topics": ["peak flow readings", "allergy season"]}'),
+                (102, 8, "Mohamed is a 67-year-old cardiac patient on warfarin. Very compliant with monitoring. His daughter Hoda often accompanies him. He asks about INR results and dietary restrictions (vitamin K foods).",
+                 '{"chronic_conditions": ["CAD", "atrial fibrillation", "hyperlipidemia"], "concerns": ["INR levels", "vitamin K diet", "fall prevention"], "preferences": {"language": "ar", "communication": "detailed explanations"}, "last_topics": ["INR results", "warfarin dose"]}'),
+                (104, 4, "Omar has chronic back pain and depression. He is frustrated with his slow recovery. Responds well to encouragement. Interested in non-pharmacological pain management options.",
+                 '{"chronic_conditions": ["disc herniation L4-L5", "depression"], "concerns": ["pain management", "return to work", "sleep quality"], "preferences": {"language": "en"}, "last_topics": ["physiotherapy progress", "sertraline adjustment"]}'),
+                (106, 6, "Karim is a 19-year-old Type 1 diabetic university student. Tech-savvy, uses insulin pump and CGM. Asks about carb counting and managing diabetes at university.",
+                 '{"chronic_conditions": ["type 1 diabetes", "celiac disease"], "concerns": ["carb counting", "hypo prevention", "gluten-free options"], "preferences": {"language": "en", "communication": "quick and direct"}, "last_topics": ["CGM readings", "exam stress and glucose"]}'),
+                (108, 7, "Youssef is a 72-year-old COPD patient. Hard of hearing — needs clear, loud communication. Former smoker. His son Adel helps with appointments. Concerned about his breathing getting worse.",
+                 '{"chronic_conditions": ["COPD", "BPH", "hearing loss"], "concerns": ["breathing worsening", "oxygen needs", "urinary symptoms"], "preferences": {"language": "ar", "communication": "slow and clear, hearing impaired"}, "last_topics": ["inhaler technique", "pulmonary rehab"]}'),
+                (121, 10, "Mona is a 70-year-old with heart failure and multiple comorbidities. Her son Sayed helps manage her care. She frequently asks about fluid and salt intake. Daily weight monitoring discussions.",
+                 '{"chronic_conditions": ["HFrEF", "atrial fibrillation", "type 2 diabetes"], "concerns": ["fluid intake", "weight monitoring", "medication timing"], "preferences": {"language": "ar"}, "last_topics": ["weight gain", "furosemide dose", "blood sugar"]}'),
+                (118, 4, "Sherif has Parkinson's disease. His tremor affects his ability to use the tablet. Needs patient interaction style. His son Walid assists with technology.",
+                 '{"chronic_conditions": ["Parkinsons disease", "cognitive impairment", "orthostatic hypotension"], "concerns": ["falls", "medication timing", "tremor management"], "preferences": {"language": "ar", "communication": "patient and slow"}, "last_topics": ["levodopa timing", "fall prevention"]}'),
+                (124, 6, "Samy has moderate Alzheimer's. Interactions are limited — he may not remember previous conversations. Caregiver (son Lotfy) often present. Focus on simple reassurance.",
+                 '{"chronic_conditions": ["Alzheimers disease", "prostate cancer", "cataracts"], "concerns": ["cognitive decline", "caregiver support", "safety at home"], "preferences": {"language": "ar", "communication": "very simple, reassuring"}, "last_topics": ["medication taken today", "caregiver questions"]}'),
+                (127, 3, "Iman has fibromyalgia and chronic fatigue. Pain levels fluctuate daily. She appreciates empathetic responses. Interested in multidisciplinary pain management approaches.",
+                 '{"chronic_conditions": ["fibromyalgia", "chronic fatigue", "TMJ disorder"], "concerns": ["pain control", "sleep improvement", "cognitive function"], "preferences": {"language": "en", "communication": "empathetic and supportive"}, "last_topics": ["pain diary", "duloxetine dose"]}'),
+            ]
+
+            for pid, sessions, summary, facts in _memory_data:
+                if not PatientMemory.query.filter_by(patient_id=pid).first():
+                    _memories.append(PatientMemory(
+                        patient_id=pid, session_count=sessions,
+                        summary=summary, key_facts=facts,
+                        updated_at=_now - timedelta(days=2),
+                    ))
+
+            if _memories:
+                db.session.add_all(_memories)
+                db.session.commit()
+                print(f"[DB] Seeded {len(_memories)} patient memory records.")
 
 # ===============================
 # AI TOOLS & HELPERS
@@ -881,6 +1425,14 @@ CLAUDE_MODEL   = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 # ---- OFFLINE MODE (Ollama) ----
 OFFLINE_MODE    = os.environ.get("OFFLINE_MODE", "0") == "1"
+
+# ---- VOICE CONVERSATION STORE ----
+# Voice POSTs come from MainVoice.py (a subprocess) without Flask session
+# cookies, so session['voice_history'] is always empty for voice calls.
+# We keep history in a module-level dict keyed by patient_id so it persists
+# across requests for the same patient within a server lifetime.
+_voice_conv_store: dict = {}   # {patient_id_or_'guest': [history_turns]}
+_VOICE_HISTORY_MAX = 10        # keep last 10 turns (5 exchanges)
 OLLAMA_URL      = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
@@ -990,6 +1542,7 @@ def interact_with_gemini(user_text, history_list, user_name, lang="en", patient_
             "- أجب بالعربية فقط باختصار (أقل من 40 كلمة)\n"
             "- كن دقيقاً ومفيداً وودوداً\n"
             "- لا تستخدم علامات Markdown أو نجوم\n"
+            "- لا تذكر أسماء الدوال أو الأدوات الداخلية أبداً — فقط أجب بشكل طبيعي\n"
             "- إذا سُئلت عن شيء لا تعرفه، قل ذلك بصراحة"
         )
         if patient_context:
@@ -1006,6 +1559,7 @@ def interact_with_gemini(user_text, history_list, user_name, lang="en", patient_
             "- Be accurate, helpful, and warm\n"
             "- Do NOT use markdown, asterisks, or bullet points\n"
             "- Write plain, natural sentences as if speaking aloud\n"
+            "- NEVER mention function names, tool names, or describe internal actions — just respond naturally with the result\n"
             "- If you do not know something, say so honestly"
         )
         if patient_context:
@@ -1032,7 +1586,7 @@ def interact_with_gemini(user_text, history_list, user_name, lang="en", patient_
 
     try:
         reply = call_llm(system_prompt, claude_messages)
-        return _clean_llm_output(reply) if OFFLINE_MODE else reply
+        return _clean_llm_output(reply, lang=lang) if OFFLINE_MODE else reply
     except Exception as e:
         print(f"[LLM] interact error: {e}")
         return "I'm having trouble connecting to my brain."
@@ -1139,6 +1693,83 @@ def api_my_appointments():
     return jsonify({"success": True, "appointments": results})
 
 
+@app.route("/api/book_appointment", methods=["POST"])
+def api_book_appointment():
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "Please sign in to book an appointment."})
+
+    user_id   = session['user_id']
+    user_name = session['user_name']
+
+    data        = request.get_json(silent=True) or request.form
+    doctor_name = (data.get("doctor_name") or "").strip()
+    date_str    = (data.get("date") or "").strip()
+    time_str    = (data.get("time_slot") or data.get("time") or "").strip()
+
+    if not doctor_name or not date_str or not time_str:
+        return jsonify({"success": False, "error": "doctor_name, date, and time_slot are required."})
+
+    clean_name = _clean_doctor_name(doctor_name)
+    if not clean_name:
+        return jsonify({"success": False, "error": f"Doctor '{doctor_name}' not found."})
+    doctor = Doctor.query.filter(Doctor.name.ilike(f"%{clean_name}%")).first()
+    if not doctor:
+        return jsonify({"success": False, "error": f"Doctor '{doctor_name}' not found."})
+
+    try:
+        from datetime import datetime as _dt
+        appt_date = _dt.strptime(date_str, "%Y-%m-%d").date()
+        appt_time = _dt.strptime(time_str, "%H:%M").time()
+    except ValueError:
+        return jsonify({"success": False, "error": "Invalid date or time format. Use YYYY-MM-DD and HH:MM."})
+
+    today    = date_type.today()
+    now_time = datetime.now().time()
+    if appt_date < today:
+        return jsonify({"success": False, "error": f"Cannot book an appointment in the past ({date_str})."})
+    if appt_date == today and appt_time <= now_time:
+        return jsonify({"success": False, "error": f"Time slot {time_str} has already passed today."})
+
+    # Check doctor schedule if available
+    day_of_week = appt_date.weekday()
+    slots     = Schedule.query.filter_by(doctor_id=doctor.id, day_of_week=day_of_week).all()
+    all_slots = Schedule.query.filter_by(doctor_id=doctor.id).all()
+    if all_slots:
+        in_schedule = bool(slots) and any(
+            s.start_time <= appt_time <= s.end_time for s in slots
+        )
+        if not in_schedule:
+            days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            avail = ", ".join(
+                f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} "
+                f"{s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')}"
+                for s in all_slots
+            )
+            return jsonify({"success": False,
+                            "error": f"Dr. {doctor.name} is not available on {days[day_of_week]} "
+                                     f"at {time_str}. Available: {avail or 'none listed'}."})
+
+    # Duplicate slot guard
+    conflict = Appointment.query.filter_by(
+        doctor_id=doctor.id, appointment_date=appt_date, time_slot=appt_time
+    ).first()
+    if conflict:
+        return jsonify({"success": False,
+                        "error": f"Dr. {doctor.name} already has an appointment at {time_str} on {date_str}."})
+
+    appt = Appointment(doctor_id=doctor.id, patient_id=user_id,
+                       patient_name=user_name,
+                       appointment_date=appt_date, time_slot=appt_time)
+    db.session.add(appt)
+    db.session.commit()
+    _slog("appointment_booked", patient_name=user_name, patient_id=user_id,
+          success=True, doctor=doctor.name, date=date_str, time=time_str,
+          appointment_id=appt.id)
+    return jsonify({"success": True, "appointment_id": appt.id,
+                    "doctor": doctor.name, "specialty": doctor.specialty,
+                    "date": date_str, "time": time_str})
+
+
 @app.route("/api/appointments/<int:appt_id>", methods=["DELETE"])
 def api_cancel_appointment(appt_id):
     if 'user_id' not in session:
@@ -1222,54 +1853,183 @@ def process_audio():
     tmp.close()
     file.save(temp_filename)
     try:
-        # 1. Whisper transcription (faster-whisper API)
-        transcribe_opts = {"beam_size": 1, "no_speech_threshold": 0.4}
+        import concurrent.futures as _cf
+
+        # 1a. Whisper transcription (faster-whisper)
+        # beam_size=5 gives best accuracy; VAD filter strips silence so the model
+        # never hallucinates on quiet segments; condition_on_previous_text=False
+        # prevents prior-segment bias from corrupting medical term recognition.
+        transcribe_opts = {
+            "beam_size": 5,
+            "no_speech_threshold": 0.45,
+            "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": 400},
+            "condition_on_previous_text": False,
+            # Temperature fallbacks: greedy first, then sample if the decoder
+            # gets stuck — critical for dialectal Arabic where the greedy path
+            # often produces low-probability loops.
+            "temperature": [0.0, 0.2, 0.4, 0.6, 0.8],
+            "compression_ratio_threshold": 2.4,
+            "log_prob_threshold": -1.0,
+        }
         if ui_lang == "ar":
+            # Wider beam + Egyptian-dialect bias. Whisper uses initial_prompt
+            # as a style primer: seeding it with colloquial Egyptian words
+            # (عايز/عاوز, إزاي, فين, ليه, بكرة, ميعاد) makes the decoder
+            # prefer dialect spellings over forced-MSA transliteration.
             transcribe_opts["language"] = "ar"
             transcribe_opts["task"] = "transcribe"
-            transcribe_opts["initial_prompt"] = "مرحبا، أنا أتحدث بالعربية في مستشفى أندلسية."
+            transcribe_opts["beam_size"] = 8
+            transcribe_opts["best_of"] = 5
+            transcribe_opts["no_speech_threshold"] = 0.35
+            transcribe_opts["initial_prompt"] = (
+                "محادثة باللهجة المصرية العامية مع روبوت استقبال في مستشفى أندلسية. "
+                "المريض بيتكلم مصري عادي: عايز، عاوز، محتاج، ممكن، لو سمحت، إزيك، إزاي، "
+                "فين، امتى، ليه، بكرة، النهارده، إمبارح، دلوقتي، أهو، كده، يعني، عشان، "
+                "الدكتور، دكتورة، ميعاد، حجز موعد، كشف، عيادة، صيدلية، دوا، علاج، "
+                "وجع، ألم، صداع، حرارة، سخونية، برد، كحة، ضغط، سكر، قلب، بطن، ضهر. "
+                "مثال: عايز أحجز ميعاد مع الدكتور إسلام بكرة. فين عيادة الأسنان؟ "
+                "عندي وجع في بطني من إمبارح."
+            )
         elif ui_lang == "en":
             transcribe_opts["language"] = "en"
             transcribe_opts["task"] = "transcribe"
-            transcribe_opts["initial_prompt"] = "Hello, I am speaking to Pepper at Andalusia Hospital."
+            transcribe_opts["initial_prompt"] = (
+                "Patient speaking to Pepper, a hospital reception robot at Andalusia Hospital. "
+                "Common medical terms: appointment, doctor, prescription, blood pressure, medication, symptoms."
+            )
 
-        segments, info = audio_model.transcribe(temp_filename, **transcribe_opts)
+        # 1b. Acoustic biomarker analysis runs in parallel with Whisper
+        def _transcribe_eager(model, path, **opts):
+            segs, info = model.transcribe(path, **opts)
+            return list(segs), info          # consume lazy generator in pool thread
+
+        with _cf.ThreadPoolExecutor(max_workers=2) as pool:
+            whisper_future  = pool.submit(
+                _transcribe_eager, audio_model, temp_filename, **transcribe_opts
+            )
+            acoustic_future = pool.submit(
+                acoustic_analyzer.analyze, temp_filename
+            )
+            segments, info = whisper_future.result()
+            try:
+                acoustic_result = acoustic_future.result()
+            except Exception as ae:
+                print(f"[ACOUSTIC] Analysis failed: {ae}")
+                acoustic_result = {"error": str(ae)}
+
         user_text = " ".join(seg.text for seg in segments).strip()
         detected_lang = info.language if info else "en"
         lang = ui_lang if ui_lang in ("ar", "en") else ("ar" if detected_lang == "ar" else "en")
         print(f"[VOICE] User said ({lang}): {user_text}")
 
-        # 2. Resolve identity (Flask session set after tablet login)
-        user_id   = session.get('user_id')
-        user_name = session.get('user_name', 'Guest')
-        role      = session.get('role', '')
+        # Log acoustic alerts if any were detected
+        for alert_msg in acoustic_result.get("alerts", []):
+            print(f"[ACOUSTIC ALERT] {alert_msg}")
+        if acoustic_result.get("error"):
+            print(f"[ACOUSTIC] {acoustic_result['error']}")
 
-        # 3. Sentiment analysis (same as chatbot)
+        # 2. Resolve identity: voice POSTs come from the PC subprocess (no session
+        #    cookie), so the patient_id is forwarded explicitly in the form data
+        #    by MainVoice.py (written by nav_bridge from the tablet WS message).
+        form_pid  = request.form.get('patient_id', '').strip()
+        if form_pid:
+            try:
+                _p = Patient.query.get(int(form_pid))
+            except Exception:
+                _p = None
+            if _p:
+                user_id   = _p.id
+                user_name = _p.name
+                role      = 'patient'
+            else:
+                user_id   = None
+                user_name = 'Guest'
+                role      = ''
+        else:
+            user_id   = session.get('user_id')
+            user_name = session.get('user_name', 'Guest')
+            role      = session.get('role', '')
+
+        # 3. Safety pre-check: bypass LLM for life-threatening red flags (same as chatbot)
+        emergency_reply, emergency_label = _detect_medical_emergency(user_text, lang=lang)
+        if emergency_reply:
+            _slog("voice_interaction", patient_name=user_name, patient_id=user_id,
+                  success=True, lang=lang,
+                  user_said=user_text[:200], ai_replied=emergency_reply[:300],
+                  emergency=emergency_label, tools_used=[])
+            return jsonify({
+                "text":  user_text,
+                "reply": emergency_reply,
+                "lang":  lang,
+                "emergency": emergency_label,
+                "acoustic_analysis": {
+                    "status": "error" if acoustic_result.get("error") else "ok",
+                    "error":  acoustic_result.get("error"),
+                    "cough_detected": acoustic_result.get("cough_detected", False),
+                    "wheeze_detected": acoustic_result.get("wheeze_detected", False),
+                    "breathlessness_score": acoustic_result.get("breathlessness_score", 0.0),
+                    "pain_score_estimate":  acoustic_result.get("pain_score_estimate", 0),
+                    "distress_score":       acoustic_result.get("distress_score", 0.0),
+                    "alerts":               acoustic_result.get("alerts", []),
+                },
+            })
+
+        # 4. Sentiment analysis (same as chatbot)
         sentiment = sentiment_analyzer.analyze(user_text, lang)
         if sentiment.get("alert"):
             print(f"[VOICE ALERT] Distress detected for {user_name}: {sentiment.get('reason')}")
 
-        # 4. Medical NER (same as chatbot)
+        # 5. Medical NER (same as chatbot)
         ner_entities = medical_ner.extract(user_text)
 
-        # 5. Conversation memory (same as chatbot)
+        # 6. Conversation memory (same as chatbot)
         mem = ConversationMemory(db, PatientMemory)
         memory_ctx = mem.get_context(user_id) if user_id else ""
 
-        # 6. Voice conversation history — trim immediately to cap memory usage
-        voice_history = session.get('voice_history', [])[-10:]
+        # 7. Multi-agent consensus for high-stakes messages (same as chatbot)
+        consensus = None
+        if multi_agent_system.should_activate(user_text):
+            try:
+                patient_meds = []
+                if user_id:
+                    _pt = Patient.query.get(user_id)
+                    if _pt and _pt.current_medications:
+                        patient_meds = [m.strip() for m in _pt.current_medications.split(",") if m.strip()]
+                dc = DrugChecker(db, Medication, DrugInteraction)
+                consensus = multi_agent_system.consult(
+                    patient_context=memory_ctx,
+                    user_message=user_text,
+                    drug_checker=dc,
+                    medications=patient_meds,
+                )
+            except Exception as _e:
+                print(f"[MULTI-AGENT VOICE] Error: {_e}")
 
-        # 7. Run full agentic loop with all features
+        # 8. Voice conversation history — use module-level store (NOT Flask session)
+        # because MainVoice.py is a subprocess that posts without a session cookie.
+        _hist_key = user_id if user_id else 'guest'
+        voice_history = list(_voice_conv_store.get(_hist_key, []))[-_VOICE_HISTORY_MAX:]
+
+        # 9. Run full agentic loop with all features
         ai_reply, tool_results = run_agentic_loop(
             user_text, user_id, user_name, role,
             lang=lang, history=voice_history, voice_mode=True,
             sentiment=sentiment, ner_entities=ner_entities, memory_ctx=memory_ctx
         )
 
-        # 8. Update voice conversation history in session
+        # 10. Guard against fabricated booking/cancel confirmations (same as chatbot)
+        ai_reply = _strip_fake_booking_claim(ai_reply, tool_results, lang=lang)
+        ai_reply = _strip_fake_cancel_claim(ai_reply, tool_results, lang=lang)
+
+        # 11. Multi-agent override when no side-effecting tools were used (same as chatbot)
+        if consensus and consensus.get("final_recommendation") and not tool_results:
+            ai_reply = consensus["final_recommendation"]
+
+        # 12. Persist voice history in module-level store (survives across requests)
         voice_history.append({"role": "user", "parts": [{"text": user_text}]})
         voice_history.append({"role": "model", "parts": [{"text": ai_reply}]})
-        session['voice_history'] = voice_history[-10:]
+        _voice_conv_store[_hist_key] = voice_history[-_VOICE_HISTORY_MAX:]
 
         print(f"[VOICE] Reply: {ai_reply}")
         _slog("voice_interaction", patient_name=user_name, patient_id=user_id,
@@ -1278,7 +2038,21 @@ def process_audio():
               ai_replied=ai_reply[:300],
               sentiment=sentiment.get("label", "neutral") if sentiment else "neutral",
               tools_used=[r.get("tool") for r in tool_results if isinstance(r, dict) and r.get("tool")])
-        return jsonify({"text": user_text, "reply": ai_reply, "lang": lang})
+        return jsonify({
+            "text":             user_text,
+            "reply":            ai_reply,
+            "lang":             lang,
+            "acoustic_analysis": {
+                "status":               "error" if acoustic_result.get("error") else "ok",
+                "error":                acoustic_result.get("error"),
+                "cough_detected":       acoustic_result.get("cough_detected", False),
+                "wheeze_detected":      acoustic_result.get("wheeze_detected", False),
+                "breathlessness_score": acoustic_result.get("breathlessness_score", 0.0),
+                "pain_score_estimate":  acoustic_result.get("pain_score_estimate", 0),
+                "distress_score":       acoustic_result.get("distress_score", 0.0),
+                "alerts":               acoustic_result.get("alerts", []),
+            },
+        })
 
     except Exception as e:
         print(f"[VOICE ERROR] {e}")
@@ -1311,7 +2085,10 @@ def api_login():
         session['role'] = role
         _slog("patient_login", patient_name=user.name, patient_id=user.id,
               success=True, role=role)
-        return jsonify({"success": True, "name": user.name})
+        resp = {"success": True, "name": user.name}
+        if role == 'patient':
+            resp["case_number"] = getattr(user, 'case_number', None) or ('CASE-' + str(user.id))
+        return jsonify(resp)
 
     _slog("patient_login", success=False, role=role,
           attempted_id=user_id, error="Invalid credentials")
@@ -1396,17 +2173,76 @@ CHAT_TOOLS = [
     },
     {
         "name": "get_navigation_targets",
-        "description": "Get list of navigable rooms and doctor locations in the hospital.",
+        "description": (
+            "Get the list of named rooms, departments, and doctor offices that Pepper "
+            "can physically guide a patient to. Call this WHENEVER the user asks about "
+            "navigation, guidance, hospital layout, room locations, 'where can you take "
+            "me', 'where can you guide me', 'how do I get to X', or similar. Never answer "
+            "these questions from memory — always call this tool first for real data."
+        ),
         "input_schema": {"type": "object", "properties": {}, "required": []}
     }
 ]
 
 
+def _find_doctor_fuzzy(cleaned_name):
+    """Find a Doctor row by name with graceful fuzzy fallback.
+
+    Order:
+      1. Substring ILIKE match (original behaviour).
+      2. Token-overlap match when the LLM paraphrased a name (e.g. the user
+         said 'Amany Yahya' but the LLM wrote 'Amany Yehia'). We only accept
+         when at least one token matches AND difflib similarity ≥ 0.75,
+         which protects against picking random doctors.
+
+    Returns the Doctor row or None.
+    """
+    import difflib, re
+    if not cleaned_name:
+        return None
+    doctor = Doctor.query.filter(Doctor.name.ilike(f"%{cleaned_name}%")).first()
+    if doctor:
+        return doctor
+    # Fuzzy fallback
+    target = cleaned_name.lower().strip()
+    target_tokens = [t for t in re.split(r"\s+", target) if len(t) >= 3]
+    if not target_tokens:
+        return None
+    best, best_score = None, 0.0
+    for d in Doctor.query.all():
+        dname = (d.name or "").lower()
+        dtokens = re.split(r"\s+", dname)
+        shared = sum(1 for t in target_tokens if t in dname)
+        if shared == 0:
+            continue
+        score = difflib.SequenceMatcher(None, target, dname).ratio()
+        if score > best_score:
+            best_score, best = score, d
+    return best if best_score >= 0.75 else None
+
+
 def _clean_doctor_name(name):
-    """Strip common prefixes like Dr., Doctor, etc. that models add."""
+    """Strip common prefixes like Dr., Doctor, etc. that models add.
+    Returns empty string for names that look like injection payloads
+    (SQL, XSS, control chars) so the DB lookup fails cleanly rather
+    than fuzzy-matching or letting the LLM hallucinate a real doctor."""
     import re
-    name = name.strip()
-    name = re.sub(r'^(Dr\.?\s*|Doctor\s+|Prof\.?\s*|Professor\s+)', '', name, flags=re.IGNORECASE).strip()
+    name = (name or "").strip()
+    name = re.sub(r'^(Dr\.?\s*|Doctor\s+|Prof\.?\s*|Professor\s+)',
+                  '', name, flags=re.IGNORECASE).strip()
+    if not name or len(name) < 2 or len(name) > 80:
+        return ""
+    # Reject payloads that clearly aren't human names.
+    # Doctor names are letters/spaces/hyphens/apostrophes/dots (+ Arabic).
+    bad_markers = ("<", ">", ";", "--", "/*", "*/", "=", "\\", "|",
+                   "script", "alert(", "drop ", "select ", " or ", " and 1",
+                   "\x00", "\u200b", "\u200c", "\ufeff")
+    low = name.lower()
+    for m in bad_markers:
+        if m in low:
+            return ""
+    if not re.match(r"^[\w\s\.\-'\u0600-\u06FF]+$", name, flags=re.UNICODE):
+        return ""
     return name
 
 
@@ -1423,14 +2259,61 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
         elif tool_name == "get_doctors":
             dept = tool_input.get("department", "").strip()
             if dept:
-                doctors = Doctor.query.filter(Doctor.specialty.ilike(f"%{dept}%")).all()
+                # Split comma-separated specialties (qwen sometimes passes multiple
+                # as one string e.g. "Endocrinology, Psychiatry, Gastroenterology").
+                import random as _rnd
+                dept_parts = [d.strip() for d in dept.replace("،", ",").split(",") if d.strip()]
+                seen_ids = set()
+                doctors = []
+                for dp in dept_parts:
+                    for doc in Doctor.query.filter(Doctor.specialty.ilike(f"%{dp}%")).all():
+                        if doc.id not in seen_ids:
+                            seen_ids.add(doc.id)
+                            doctors.append(doc)
             else:
+                import random as _rnd
                 doctors = Doctor.query.all()
-            return {"doctors": [{"id": d.id, "name": d.name, "specialty": d.specialty} for d in doctors]}
+            # Shuffle so the LLM doesn't always recommend the first entry —
+            # small models (qwen2.5:7b) otherwise fixate on one name.
+            doc_list = [{"id": d.id, "name": d.name, "specialty": d.specialty} for d in doctors]
+            _rnd.shuffle(doc_list)
+            # Pre-built presentation strings in BOTH languages so qwen never
+            # joins names itself (concatenation produces "Sameh RadwanNeveen Darwish").
+            if doc_list:
+                ar_items = "، ".join(f"د. {d['name']} ({d['specialty']})" for d in doc_list)
+                en_items = ", ".join(f"Dr. {d['name']} ({d['specialty']})" for d in doc_list)
+                presentation_ar = (
+                    f"الأطباء المتاحون: {ar_items}. من تفضل؟"
+                    if len(doc_list) > 1
+                    else f"الطبيب المتاح: د. {doc_list[0]['name']}، تخصص {doc_list[0]['specialty']}."
+                )
+                presentation_en = (
+                    f"Available doctors: {en_items}. Who would you prefer?"
+                    if len(doc_list) > 1
+                    else f"The available doctor is Dr. {doc_list[0]['name']}, specializing in {doc_list[0]['specialty']}."
+                )
+            else:
+                presentation_ar = "لا يوجد أطباء متاحون في هذا التخصص حالياً."
+                presentation_en = "No doctors are currently available for that specialty."
+            return {
+                "doctors": doc_list,
+                "reply_ar": presentation_ar,
+                "reply_en": presentation_en,
+                "_instructions": (
+                    "IMPORTANT: Reply in the SAME language the patient used. "
+                    "If Arabic → use 'reply_ar' verbatim as the base of your reply. "
+                    "If English → use 'reply_en' verbatim as the base of your reply. "
+                    "Do NOT concatenate names yourself. "
+                    "When recommending ONE doctor, pick ONE from the list and add a short reason "
+                    "why they suit the patient's conditions."
+                ),
+            }
 
         elif tool_name == "get_doctor_schedule":
             name = _clean_doctor_name(tool_input.get("doctor_name", ""))
-            doctor = Doctor.query.filter(Doctor.name.ilike(f"%{name}%")).first()
+            if not name:
+                return {"error": "Invalid or missing doctor name."}
+            doctor = _find_doctor_fuzzy(name)
             if not doctor:
                 return {"error": f"Doctor '{name}' not found."}
             slots = Schedule.query.filter_by(doctor_id=doctor.id).all()
@@ -1442,9 +2325,11 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
             if role != 'patient':
                 return {"error": "Only logged-in patients can book appointments."}
             doctor_name = _clean_doctor_name(tool_input.get("doctor_name", "") if tool_input else "")
+            if not doctor_name:
+                return {"error": "Invalid or missing doctor name."}
             date_str    = (tool_input or {}).get("date", "")
             time_str    = (tool_input or {}).get("time_slot", "")
-            doctor = Doctor.query.filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
+            doctor = _find_doctor_fuzzy(doctor_name)
             if not doctor:
                 return {"error": f"Doctor '{doctor_name}' not found."}
             try:
@@ -1463,17 +2348,30 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
             if appt_date == today and appt_time <= now_time:
                 return {"error": f"The time slot {time_str} has already passed today. Please choose a future time."}
 
-            # Check the requested time falls within the doctor's schedule
-            day_of_week = appt_date.weekday()  # 0=Monday
-            slots = Schedule.query.filter_by(doctor_id=doctor.id, day_of_week=day_of_week).all()
-            if slots:
-                in_schedule = any(s.start_time <= appt_time <= s.end_time for s in slots)
+            # Check the requested time falls within the doctor's schedule.
+            # Drop any SQLAlchemy session cache first so we see the real row state
+            # (prevents phantom "doctor works this day" results from a stale view).
+            try:
+                db.session.expire_all()
+            except Exception:
+                pass
+            day_of_week = appt_date.weekday()  # 0=Monday … 6=Sunday
+            all_slots = Schedule.query.filter_by(doctor_id=doctor.id).all()
+            slots_today = [s for s in all_slots if int(s.day_of_week) == int(day_of_week)]
+            print(f"[BOOK-CHECK] doctor={doctor.name!r} id={doctor.id} "
+                  f"date={date_str} dow={day_of_week} "
+                  f"all_dows={[int(s.day_of_week) for s in all_slots]} "
+                  f"slots_today={[(s.start_time, s.end_time) for s in slots_today]}")
+            if all_slots:
+                in_schedule = bool(slots_today) and any(
+                    s.start_time <= appt_time <= s.end_time for s in slots_today
+                )
                 if not in_schedule:
                     days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
                     avail = ", ".join(
-                        f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} "
+                        f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][int(s.day_of_week)]} "
                         f"{s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')}"
-                        for s in Schedule.query.filter_by(doctor_id=doctor.id).all()
+                        for s in all_slots
                     )
                     return {"error": f"Dr. {doctor.name} is not available on {days[day_of_week]} at {time_str}. "
                                      f"Available slots: {avail or 'none listed'}."}
@@ -1541,13 +2439,46 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
             return patient.to_profile()
 
         elif tool_name == "get_navigation_targets":
+            # Return a structured split so the LLM knows which entries are
+            # doctor offices vs. hospital facilities (pharmacy, ICU, ER, etc.).
+            # Small models previously dumped the full doctor list when asked
+            # "where is the pharmacy?" because every target looked the same.
             try:
                 with open(str(_NAV_TARGETS_PATH), "r", encoding="utf-8") as f:
                     nav_data = json.load(f)
-                return {"targets": nav_data.get("targets", [])}
+                all_targets = nav_data.get("targets", [])
+                doctor_offices = []
+                facilities = []
+                for t in all_targets:
+                    if t.get("facility"):
+                        facilities.append({
+                            "name": t.get("name"),
+                            "facility_type": t.get("facility"),
+                            "location": t.get("room_name", ""),
+                        })
+                    else:
+                        doctor_offices.append({
+                            "name": t.get("name"),
+                            "specialty": t.get("specialty"),
+                            "location": t.get("room_name", ""),
+                        })
+                return {
+                    "doctor_offices": doctor_offices,
+                    "facilities": facilities,
+                    "_instructions": (
+                        "Use 'facilities' to answer questions about pharmacy, "
+                        "laboratory, radiology, ICU, emergency, bathroom, "
+                        "reception, cafeteria, etc. Use 'doctor_offices' ONLY "
+                        "when the patient asks about a specific doctor by "
+                        "name. Do NOT list doctors in response to a facility "
+                        "question. If the requested facility is NOT in the "
+                        "'facilities' list, say you don't know and suggest "
+                        "asking at reception."
+                    ),
+                }
             except Exception:
-                doctors = Doctor.query.all()
-                return {"targets": [{"name": d.name, "specialty": d.specialty} for d in doctors]}
+                return {"doctor_offices": [], "facilities": [],
+                        "error": "Navigation targets file not loaded."}
 
         else:
             return {"error": f"Unknown tool: {tool_name}"}
@@ -1574,10 +2505,27 @@ for _t in CHAT_TOOLS:
     })
 
 
-def _clean_llm_output(text):
-    """Strip markdown artifacts that local models sometimes produce."""
+def _clean_llm_output(text, lang="en"):
+    """Strip markdown artifacts and internal tool-call chatter that local
+    models sometimes leak into user-facing text."""
     import re
     text = text.strip()
+    # Strip leaked tool-result key prefixes that qwen sometimes echoes verbatim
+    # (e.g. "_presentation_en ...", "\_presentation_en ...", "reply_en ...").
+    # The \\ prefix variant occurs when qwen markdown-escapes the underscore.
+    text = re.sub(r'^\\?(?:_presentation_(?:en|ar)|reply_(?:en|ar))\s+', '', text)
+
+    # Strip template placeholder leakage: "[list of medications]",
+    # "[your medications]", "[patient name]", "[insert X here]", etc.
+    # These are artefacts of the model imitating a template reply rather than
+    # using real data. Replace with a generic phrase so the sentence still flows.
+    text = re.sub(
+        r'\[(?:list|insert|your|the|patient|full)\s+[^\]\[]{0,40}\]',
+        'the information on file',
+        text, flags=re.IGNORECASE,
+    )
+    # Also strip obvious placeholders like "[XXX]" or "[TODO]" or "[...]"
+    text = re.sub(r'\[(?:\.{3}|TODO|XXX|PLACEHOLDER|FILL(?:_IN)?)\]', '', text, flags=re.IGNORECASE)
     # Remove **bold** markers
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     # Remove *italic* markers
@@ -1588,9 +2536,548 @@ def _clean_llm_output(text):
     text = re.sub(r'(?m)^\d+\.\s+', '', text)
     # Remove markdown headers
     text = re.sub(r'(?m)^#+\s+', '', text)
+
+    # Safety net: drop whole sentences that leak internal tool names,
+    # parameter syntax, or tool-result narration. These should never reach the patient.
+    tool_names = {t["name"] for t in CHAT_TOOLS}
+    tool_alt   = "|".join(re.escape(n) for n in tool_names)
+    # Patterns that indicate the model is narrating its tool-result context
+    # to the patient (a common Ollama/qwen failure mode).
+    leakage_patterns = [
+        r"thank you for (?:providing|sharing|giving)",
+        r"\bjson\b",
+        r"\bthe\s+(?:dataset|data\s+you\s+provided|provided\s+data)\b",
+        r"based on (?:this|the|your)\s+(?:provided\s+)?(?:information|data|json|dataset|list|entries)",
+        r"\busing (?:this|the) data\b",
+        r"\b(?:the|this) data(?:base)? shows\b",
+        r"\blet'?s\s+break\s+(?:this|it|them)\s+down\b",
+        r"\bhere are some (?:insights|observations|patterns|key points)\b",
+        r"\bspecialties?\s+distribution\b",
+        r"\bnames?\s+analysis\b",
+        r"\bthe\s+(?:list|data)\s+contains\b",
+        r"\b\d+\s+entries\b",
+        r"\beach\s+entry\s+is\b",
+        r"\bdictionary\s+with\b",
+        r"(?:could|can|would) you (?:please\s+)?(?:specify|provide|clarify) "
+        r"(?:what kind of|the task|more details about)",
+        # Dataset-analysis narration (qwen failure mode: "Doctors' Names: ...")
+        r"\bdoctors[''']?\s+names\s*:",
+        r"\bspecialties\s+with\s+more\s+doctors\b",
+        r"\bnames\s+(?:are\s+diverse|appear\s+multiple\s+times)\b",
+        r"\b(?:no|any)\s+(?:clear\s+)?pattern\s+in\s+naming\b",
+        r"\bnaming\s+conventions?\b",
+        r"\bdifferent\s+genders\s+and\s+ethnic\s+backgrounds\b",
+        r"\bcover(?:s|ing)?\s+a\s+wide\s+range\s+of\s+medical\s+fields\b",
+        r"\b(?:filter|sort|count)\s+(?:doctors|the\s+list)\s+by\b",
+        r"\bgenerate\s+statistics\b",
+        # Extra variants observed in results.txt
+        r"\bfor\s+example\s*:\s*(?:do\s+you|find\s+all|filter\s+doctors|count\s+how\s+many|sort\s+the\s+list)",
+        r"\bif\s+you\s+need\s+to\s+perform\s+any\s+(?:specific\s+)?operations?\s+or\s+analys",
+        r"\bthere\s+are\s+several\s+names\s+that\s+appear\s+multiple\s+times",
+        r"\bthe\s+most\s+common\s+specialties\s+include\s*:",
+        r"\b(?:generate|perform)\s+(?:some\s+)?(?:analys|statistics)",
+        r"\bspecific\s+analysis\s+or\s+further\s+insights",
+        r"\bhere\s+are\s+some\s+(?:insights|observations|statistics)",
+        r"\bthe\s+(?:provided\s+)?list\s+(?:shows|contains|includes)\b",
+    ]
+    leakage_re = re.compile("|".join(leakage_patterns), re.IGNORECASE)
+
+    # Split to sentences, drop any that look like internal narration.
+    sentences = re.split(r'(?<=[\.\!\?؟])\s+', text)
+    kept = []
+    for s in sentences:
+        if re.search(r"`\w+`", s):
+            continue
+        if re.search(r"\b(?:" + tool_alt + r")\b", s, re.IGNORECASE):
+            continue
+        if re.search(r"parameter\s+(?:set\s+to|value|named)", s, re.IGNORECASE):
+            continue
+        if re.search(r"\bfunction\s+call\b|\btool\s+call\b", s, re.IGNORECASE):
+            continue
+        if leakage_re.search(s):
+            continue
+        kept.append(s)
+
+    if kept:
+        text = " ".join(kept)
+    else:
+        # Everything was narration. Replace with a benign prompt for clarification
+        # rather than leaking the original.
+        if lang == "ar":
+            text = "كيف أقدر أساعدك؟"
+        else:
+            text = "How can I help you?"
+
+    # Strip scripts that should never appear in either English or Arabic
+    # replies from this hospital bot. qwen2.5:7b occasionally switches
+    # scripts mid-answer (seen: Chinese in an Arabic schedule reply).
+    # Ranges: CJK Unified Ideographs, Hiragana/Katakana, Hangul, CJK symbols,
+    # fullwidth forms, Cyrillic.
+    text = re.sub(
+        r'[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF'
+        r'\uAC00-\uD7AF\uFF00-\uFFEF\u0400-\u04FF]+',
+        '', text)
+
+    # Arabic mode: also strip Hebrew (U+0590–U+05FF) which qwen occasionally
+    # substitutes for Arabic. Arabic mode: drop any residual stretch that
+    # is pure Latin (qwen sometimes falls back to English mid-sentence).
+    if lang == "ar":
+        text = re.sub(r'[\u0590-\u05FF]+', '', text)
+
+    text = re.sub(r'\s{2,}', ' ', text).strip()
     # Collapse multiple newlines
     text = re.sub(r'\n{2,}', ' ', text)
     return text.strip()
+
+
+def _detect_narrated_tool_name(text: str):
+    """
+    Detect when a model says 'I'll call get_doctors' (narrates a tool call in
+    plain text) instead of actually calling it via the tool mechanism.
+    Returns the matched tool name string, or None.
+    """
+    import re
+    tool_names = {t["name"] for t in CHAT_TOOLS}
+
+    # Catch many narration variants: "I'll call X", "let me call X",
+    # "can you call X", "let's check with X", "we need to call X",
+    # "first, let's use X", "by calling X", "via X", etc.
+    intent_re = re.compile(
+        r"(?:i(?:'ll| will| am going to| would| can| could)|let(?:'s|\s+me|\s+us)|"
+        r"we(?:'ll| will| need to| should| can| could| can use| should use)|"
+        r"you(?:'ll| can| should| could)|can you|could you|please|first[,\s]+|"
+        r"by|via|through|going to|need to|have to|about to)[\s\w,]*?"
+        r"(?:call|calling|use|using|invoke|invoking|run|running|execute|executing|"
+        r"check(?:\s+with)?|trigger|querying|query)\s+"
+        r"(?:the\s+)?[`'\"]?(\w+)[`'\"]?",
+        re.IGNORECASE
+    )
+    m = intent_re.search(text)
+    if m and m.group(1).lower() in tool_names:
+        return m.group(1).lower()
+
+    # "the get_doctors function/tool", "get_doctors() function"
+    for bm in re.finditer(r"(\w+)\s*(?:\(\)|function|tool|method)", text, re.IGNORECASE):
+        if bm.group(1).lower() in tool_names:
+            return bm.group(1).lower()
+
+    # Backtick-quoted tool name anywhere in the text: `get_doctors`
+    for bm in re.finditer(r"`(\w+)`", text):
+        if bm.group(1).lower() in tool_names:
+            return bm.group(1).lower()
+
+    # "parameter set to", "with the X parameter" — strong signal of tool narration
+    if re.search(r"parameter\s+(?:set\s+to|value|named)", text, re.IGNORECASE):
+        for tn in tool_names:
+            if re.search(r"\b" + re.escape(tn) + r"\b", text, re.IGNORECASE):
+                return tn
+
+    # Semantic narration: model says it will check/find doctors without naming the tool.
+    # e.g. "I'll check the doctors who specialize", "let me find a doctor for you",
+    # "Let's see what doctor recommendations we have", "I'll look for a specialist"
+    doctor_narrate_re = re.compile(
+        r"(?:i(?:'ll| will| am going to| would| can)[\s\w,]*?|"
+        r"let(?:'s|\s+me|\s+us)[\s\w,]*?|"
+        r"let['']s see[\s\w,]*?)"
+        r"(?:check|find|look\s+for|search\s+for|see|fetch|retrieve|get|pull|gather)"
+        r"[\s\w,]*?(?:doctor|physician|specialist|recommendation)",
+        re.IGNORECASE
+    )
+    if doctor_narrate_re.search(text):
+        return "get_doctors"
+
+    # "I'll retrieve your profile", "let me check your medical record/history"
+    profile_narrate_re = re.compile(
+        r"(?:i(?:'ll| will| am going to)[\s\w,]*?|let(?:'s|\s+me|\s+us)[\s\w,]*?)"
+        r"(?:check|retrieve|fetch|get|look\s+(?:up|at)|pull)"
+        r"[\s\w,]*?(?:profile|medical\s+(?:record|history|info)|patient\s+(?:record|info|data))",
+        re.IGNORECASE
+    )
+    if profile_narrate_re.search(text):
+        return "get_patient_profile"
+
+    # Arabic narration: "سأتحقق من الأطباء", "دعني أبحث عن طبيب"
+    if re.search(r"سأتحقق|سأبحث|دعني\s+(?:أتحقق|أبحث|أجد)\s+(?:عن\s+)?(?:طبيب|دكتور)", text):
+        return "get_doctors"
+    if re.search(r"سأتحقق|سأنظر|دعني\s+(?:أتحقق|أنظر)\s+(?:في\s+)?(?:ملفك|سجلك|تاريخك|بياناتك)", text):
+        return "get_patient_profile"
+
+    return None
+
+
+def _detect_intent(user_text, lang="en"):
+    """Return a tool name the user's message clearly demands, or None.
+
+    Used to enforce tool calls on local (qwen) models that often skip them
+    for navigation / patient-profile / booking queries. We only return a
+    tool name when the signal is very strong — false positives hurt more
+    than false negatives here.
+    """
+    import re
+    t = (user_text or "").lower().strip()
+    if not t:
+        return None
+
+    # List appointments: "show/what are my appointments", "do I have any appointments"
+    list_appt_en = (
+        r"\b(?:show|list|what are|check|see|view|tell me)\s+(?:me\s+)?(?:my|all|current|upcoming)\s+"
+        r"(?:upcoming\s+)?appointments?\b|"
+        r"\bdo i (?:still\s+)?have (?:any|upcoming|some) appointments?\b|"
+        r"\bhow many appointments\b|"
+        r"\bmy (?:upcoming|current|scheduled|remaining|existing) appointments?\b|"
+        r"\bwhat appointments\b|"
+        r"\bappointments?\s+(?:do|have)\s+i\s+(?:still\s+)?(?:have|got)\b|"
+        r"\bremaining\s+appointments?\b|"
+        r"\bappointments?\s+(?:i\s+still\s+have|left|remaining)\b|"
+        r"\bany\s+(?:upcoming\s+)?appointments?\s+(?:i\s+have|left|remaining)\b|"
+        r"\bremind\s+me\s+(?:of\s+)?(?:my\s+)?appointments?\b"
+    )
+    list_appt_ar = r"مواعيدي|مواعيدك|عرض المواعيد|ما هي مواعيدي|هل لدي مواعيد"
+    if re.search(list_appt_en, t) or re.search(list_appt_ar, user_text or ""):
+        return "get_my_appointments"
+
+    # Cancel by context (no explicit numeric ID): fetch appointments first so the
+    # model can identify the right one to cancel.
+    cancel_no_id_en = (
+        r"\bcancel\b(?!.*\b(?:appointment\s+)?(?:number|#|id|no\.?)\s*\d+\b)"
+        r".*\b(?:appointment|visit|booking|slot)\b|"
+        r"\bcancel\s+(?:my|the|that|this)\s+appointment\b(?!.*\b\d{3,}\b)|"
+        r"\bcancel\s+(?:what|the one|it)\b"
+    )
+    cancel_no_id_ar = r"إلغاء\s+موعدي|الغِ\s+موعدي|أريد\s+إلغاء\s+الموعد"
+    if re.search(cancel_no_id_en, t) or re.search(cancel_no_id_ar, user_text or ""):
+        # Return get_my_appointments so the model fetches the list first, then cancels
+        return "get_my_appointments"
+
+    # Patient profile: questions about the user's own record (strengthened to catch
+    # medication-specific questions that qwen skips the tool for)
+    profile_en = (
+        r"\bmy (?:medical )?record\b|\bmy (?:profile|history|allergies|medications?|"
+        r"meds|prescription|blood type|age|date of birth|dob)\b|"
+        r"\bhow old am i\b|\bwhen was i born\b|\bwhat (?:do )?you know about me\b|"
+        r"\bam i (?:allergic|diabetic|on any)\b|\bdo i (?:have|take)\b.+(?:allerg|medic|condition)|"
+        r"\bwhat medications?\s+am i\b|\bwhat(?:'m| am) i (?:currently\s+)?(?:taking|on)\b|"
+        r"\bwhat meds am i\b|\bam i (?:currently\s+)?(?:taking|on)\s+any\b|"
+        r"\bcurrently\s+(?:on|taking)\s+(?:any\s+)?medications?\b"
+    )
+    profile_ar = (
+        r"ملفي الطبي|تاريخي الطبي|حساسيتي|أدويتي|دوائي|فصيلة دمي|عمري|"
+        r"تاريخ ميلادي|ماذا تعرف عني|هل أعاني|هل أتناول"
+    )
+    if re.search(profile_en, t) or re.search(profile_ar, user_text or ""):
+        return "get_patient_profile"
+
+    # Departments: "what departments do you have", "show hospital departments", etc.
+    dept_en = (
+        r"\b(?:what|which|show|list|tell me(?: about)?|do you have|see)\s+"
+        r"(?:the\s+)?(?:medical\s+|hospital\s+)?departments?\b|"
+        r"\bhospital\s+departments?\b|"
+        r"\bdepartments?\s+(?:available|you have|at the hospital|in the hospital|here)\b|"
+        r"\bwhat\s+(?:medical\s+)?(?:services|specialties|specializations)\s+(?:do you|does the hospital)\b"
+    )
+    dept_ar = (
+        r"الأقسام|أقسام المستشفى|ما هي الأقسام|ما الأقسام|عرض الأقسام|"
+        r"التخصصات|الخدمات الطبية"
+    )
+    if re.search(dept_en, t) or re.search(dept_ar, user_text or ""):
+        return "get_departments"
+
+    # Navigation: guide / take me / where is X / where can I Y
+    nav_en = (
+        r"\btake me to\b|\bguide me (?:to|toward)?\b|\blead me to\b|\bdirect me to\b|"
+        r"\bhow do i (?:get|go|find) to\b|\bhow do i find\b|"
+        r"\bwhere (?:is|are|can i find|'?s)\b|"
+        r"\bwhere can (?:you|i)\s+(?:take|guide|lead|pay|find|go|get)\b|"
+        r"\bdirections? to\b|\bnavigate (?:me )?to\b|\b(?:show|point) me (?:the way|to)\b|"
+        r"\bi need (?:to get to|to find|the)\s+(?:pharmacy|lab|laboratory|radiology|emergency|"
+        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|operating|"
+        r"elevator|elevators|billing|waiting area|nurse)\b|"
+        r"\bi'?m hungry\b|"
+        r"\bwhich (?:floor|level|way)\b"
+    )
+    nav_ar = (
+        r"خذني إلى|دلني على|أرني|كيف أذهب|كيف أصل|أين هو|أين يقع|أين توجد|أين\s+الـ|"
+        r"اذهب بي|اصطحبني|اريد الذهاب|فين\s+(?:الصيدلية|المختبر|الطوارئ|الاستقبال|الحمام)"
+    )
+    if re.search(nav_en, t) or re.search(nav_ar, user_text or ""):
+        return "get_navigation_targets"
+
+    # Bare facility name (without "where is") — "pharmacy?", "the cafeteria please"
+    # — treat as a navigation query if no other intent matched above.
+    bare_facility_en = (
+        r"^(?:the\s+)?(?:pharmacy|laboratory|lab|radiology|emergency\s+(?:room|department)|"
+        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|"
+        r"operating theatres?|elevators?|billing|waiting area)\s*\??$"
+    )
+    if re.search(bare_facility_en, t):
+        return "get_navigation_targets"
+
+    # Doctor recommendation / find a doctor
+    recommend_en = (
+        r"\b(?:recommend|suggest|find|show)(?: me)? (?:a |an )?(?:doctor|physician|specialist|"
+        r"gp|general\s+practitioner|cardiologist|dermatologist|neurologist|psychiatrist|"
+        r"psychologist|oncologist|pediatrician|orthopedist|gastroenterologist|"
+        r"endocrinologist|urologist|gynecologist|surgeon|internist|rheumatologist|"
+        r"pulmonologist|nephrologist|ophthalmologist|ent|dentist|radiologist)\b|"
+        r"\bwho should i (?:see|visit|consult)\b|\bi need (?:a |to see )(?:a |an )?(?:doctor|specialist)\b|"
+        r"\bcan you (?:recommend|suggest) (?:a |an )?(?:doctor|physician|specialist)\b"
+    )
+    recommend_ar = (
+        r"أنصحني بطبيب|اقترح(?:ي)? طبيب|أريد طبيب|محتاج(?:ة)? طبيب|دكتور(?:ة)? (?:عام|متخصص)|"
+        r"من أرى|أنصحني|انصحني|اقترح لي|"
+        r"رشح لي|ارشح لي|ارشحلي|رشحيلي|رشحلي|وصيلي|وصّيلي|"
+        r"رشّح|ارشح|نفسي محتاج|محتاج(?:ة)? دكتور|"
+        r"(?:رشح|ارشح|وصي|اقترح).{0,15}دكتور|"
+        r"حسب حالتي.{0,20}دكتور|دكتور.{0,20}حسب حالتي"
+    )
+    if re.search(recommend_en, t) or re.search(recommend_ar, user_text or ""):
+        return "get_doctors"
+
+    # Broad catch: "a doctor" + context phrase — handles bad STT transcriptions
+    # like "To me, a doctor based on my patient" (mangled Arabic → English).
+    has_doctor_word = bool(re.search(r"\b(?:a |an )?(?:doctor|physician|specialist)\b", t))
+    has_context = bool(re.search(
+        r"\bbased on\b|\bfor my\b|\baccording to\b|\bmatching my\b|\bsuitable for\b|"
+        r"\bfor me\b|\brecommend\b|\bsuggest\b|\badvise\b", t))
+    if has_doctor_word and has_context:
+        return "get_doctors"
+
+    # Booking: explicit date + time + booking verb. We intentionally do NOT
+    # require the word "appointment" — natural phrasings like "book with Dr. X
+    # on DATE at TIME" or "I'd like to schedule a visit on DATE at TIME" are
+    # valid booking requests.
+    has_date = bool(re.search(r"\b\d{4}-\d{1,2}-\d{1,2}\b", user_text or ""))
+    has_time = bool(re.search(r"\b\d{1,2}:\d{2}\b", user_text or ""))
+    book_en  = (
+        r"\b(?:book|schedule|reserve|make)\b.*\bappointment\b"
+        r"|\bbook (?:me|an appointment|a slot)\b"
+        r"|\b(?:book|reserve)\s+(?:me\s+)?(?:with|for)\b"     # "book with Dr. X"
+        r"|\b(?:i(?:'d| would) like to|i want to|please)\s+(?:book|schedule|reserve)\b"
+        r"|\bschedule\s+(?:a\s+)?(?:visit|session|consultation|appointment|slot)\b"
+    )
+    book_ar  = r"احجز|احجزي|اريد حجز|عايز(?:ة)? حجز|محتاج(?:ة)? حجز"
+    if has_date and has_time and (re.search(book_en, t) or re.search(book_ar, user_text or "")):
+        return "book_appointment"
+
+    return None
+
+
+# High-priority red-flag patterns. If any hit, bypass the LLM entirely and
+# return a hard-coded triage reply. The LLM is too unreliable for the
+# handful of conditions where wrong advice can kill someone (anaphylaxis,
+# stroke, overdose, severe chest pain).
+_EMERGENCY_PATTERNS = [
+    # (regex_en, regex_ar, reply_en, reply_ar, label)
+    (
+        r"\btongue\s+(?:is\s+|feels?\s+)?(?:swollen|swelling|numb|enlarged)|"
+        r"\bthroat\s+(?:is\s+)?(?:closing|swelling|swollen|tight)|"
+        r"\b(?:hives?|rash|welts?|urticaria)\b.{0,80}\b(?:breath|swelling|swollen|tongue|lips?|face)\b|"
+        r"\b(?:lips?|face|tongue)\b.{0,60}\b(?:swollen|swelling)\b.{0,60}\b(?:hives?|rash|itch|breath)\b|"
+        r"\bswollen\b.{0,40}\b(?:tongue|throat|lips?|face)\b|"
+        r"\bbreaking\s+out\s+in\s+(?:hives?|rash)|"
+        r"\banaphyla",
+        r"لساني\s*(?:متورم|منتفخ)|حلقي\s*(?:يغلق|منتفخ)|تورم\s*(?:الشفاه|الوجه|اللسان)|"
+        r"حساسية\s*مفرطة|anaphyla",
+        "This sounds like a severe allergic reaction (anaphylaxis). Call emergency services "
+        "immediately. If you have an epinephrine auto-injector (EpiPen), use it now. "
+        "Go to the Emergency Department on the Ground Floor right away.",
+        "يبدو أن هذه حساسية مفرطة خطيرة. اتصل بالطوارئ فوراً. "
+        "إذا كان لديك حقنة إبينفرين، استخدمها الآن. توجه إلى قسم الطوارئ في الدور الأرضي حالاً.",
+        "anaphylaxis",
+    ),
+    (
+        r"\bfac(?:e|ial)\s+(?:is\s+)?dropping|face\s+drooping\b|\bcan'?t\s+(?:lift|raise|move)\s+(?:my\s+)?(?:arm|leg)\b|"
+        r"\bsudden\s+(?:weakness|numbness)\b.*\b(?:arm|leg|face|side)\b|\bslurred\s+speech\b|"
+        r"\bstroke\b.*\bsymptoms\b",
+        r"وجهي\s*(?:مائل|منحرف)|لا\s*أستطيع\s*(?:رفع|تحريك)\s*(?:ذراعي|يدي|رجلي)|"
+        r"نصف\s*جسمي\s*(?:ضعيف|مشلول)|كلامي\s*(?:متلعثم|غير واضح)",
+        "These are warning signs of a stroke. Time is critical. Call emergency services now "
+        "or go directly to the Emergency Department on the Ground Floor. Do not wait.",
+        "هذه علامات سكتة دماغية. الوقت حرج جداً. اتصل بالطوارئ الآن أو توجه فوراً إلى قسم "
+        "الطوارئ في الدور الأرضي. لا تنتظر.",
+        "stroke",
+    ),
+    (
+        r"\bsevere\s+chest\s+pain\b|\bcrushing\s+chest\b|\bchest\s+pain\b.*\b(?:radiat|left\s+arm|jaw|sweat|breath)\b|"
+        r"\bheart\s+attack\b",
+        r"ألم\s*(?:شديد\s*في\s*)?الصدر|ضغط\s*في\s*صدري|نوبة\s*قلبية",
+        "Severe chest pain can mean a heart attack. Call emergency services immediately. "
+        "Sit down, stay calm, and go to the Emergency Department on the Ground Floor.",
+        "ألم الصدر الشديد قد يعني نوبة قلبية. اتصل بالطوارئ فوراً. اجلس، اهدأ، "
+        "وتوجه إلى قسم الطوارئ في الدور الأرضي.",
+        "chest_pain",
+    ),
+    (
+        r"\b(?:double|twice|two)\s+(?:my\s+)?(?:dose|pill|tablet|medication)\b|"
+        r"\b(?:took|swallowed)\s+(?:too\s+many|extra)\b|\boverdose\b|"
+        r"\btook\s+double\b",
+        r"جرعة\s*(?:مضاعفة|زائدة)|تناولت\s*(?:حبتين|جرعتين)|جرعة\s*زائدة",
+        "A medication overdose can be dangerous. Call the poison control hotline or emergency "
+        "services right now and tell them which medication and how much. Do not wait for symptoms. "
+        "If you are at the hospital, go to the Emergency Department immediately.",
+        "الجرعة الزائدة قد تكون خطيرة. اتصل بالطوارئ الآن وأخبرهم عن الدواء والكمية. "
+        "لا تنتظر الأعراض. إذا كنت في المستشفى، توجه فوراً إلى قسم الطوارئ.",
+        "overdose",
+    ),
+    (
+        r"\b(?:can'?t|cannot|not\s+able\s+to)\s+breathe\b|\bchoking\b|\bturning\s+blue\b",
+        r"لا\s*أستطيع\s*التنفس|أختنق|ضيق\s*(?:شديد\s*)?في\s*التنفس",
+        "Severe breathing difficulty is a medical emergency. Call emergency services or go to "
+        "the Emergency Department on the Ground Floor right now.",
+        "صعوبة التنفس الشديدة حالة طارئة. اتصل بالطوارئ أو توجه فوراً إلى قسم الطوارئ "
+        "في الدور الأرضي.",
+        "respiratory",
+    ),
+    (
+        r"\b(?:seizure|convuls(?:ion|ing))\b|"
+        r"\b(?:unconscious|unresponsive|passed\s+out|collapsed|fainted)\b|"
+        r"\b(?:not\s+breathing|no\s+pulse)\b|"
+        r"\b(?:fell|fallen)\s+(?:down\s+)?and\s+(?:is|isn'?t|won'?t)\s+(?:respond|wake)",
+        r"نوبة\s*(?:صرع|تشنج)|تشنج|فاقد\s*(?:الوعي|للوعي)|"
+        r"غائب\s*عن\s*الوعي|لا\s*يستجيب|انهار|وقع\s*على\s*الأرض",
+        "This is a medical emergency. Call emergency services immediately (911 or local equivalent). "
+        "Keep the person safe — clear the area, do not restrain them, and turn them on their side "
+        "if possible. Flag any hospital staff nearby and go to the Emergency Department on the "
+        "Ground Floor for immediate assistance.",
+        "هذه حالة طارئة. اتصل بالطوارئ فوراً. حافظ على سلامة المريض - أزل أي أشياء حوله، "
+        "لا تحاول تقييده، وأدره على جانبه إن أمكن. أبلغ أي طاقم طبي قريب وتوجه إلى قسم "
+        "الطوارئ في الدور الأرضي للمساعدة الفورية.",
+        "seizure_unconscious",
+    ),
+    (
+        r"\b(?:severe|heavy|uncontrolled|won'?t\s+stop|massive)\s+bleeding\b|"
+        r"\bbleeding\s+(?:won'?t\s+stop|heavily|profusely|badly)\b|"
+        r"\b(?:cut|cutting|stabbed|stab)\b.{0,40}\b(?:deep|deeply|artery|vein)\b|"
+        r"\bhemorrhag",
+        r"نزيف\s*(?:شديد|غزير|لا\s*يتوقف)|ينزف\s*بشدة",
+        "This is a bleeding emergency. Apply firm direct pressure to the wound with a clean cloth, "
+        "elevate the injured area if possible, and call emergency services immediately. "
+        "Go to the Emergency Department on the Ground Floor right away.",
+        "هذه حالة نزيف طارئة. اضغط بقوة مباشرة على الجرح بقماش نظيف، ارفع المنطقة المصابة إن "
+        "أمكن، واتصل بالطوارئ فوراً. توجه إلى قسم الطوارئ في الدور الأرضي حالاً.",
+        "severe_bleeding",
+    ),
+]
+
+
+def _strip_fake_booking_claim(reply_text, tool_results, lang="en"):
+    """Rewrite the reply if it claims a successful booking without a matching
+    book_appointment tool success in this turn.
+
+    tool_results is the list returned by run_agentic_loop — each entry is a
+    dict like {"tool": "...", "output": {...}}.
+    """
+    import re
+    if not reply_text:
+        return reply_text
+
+    # Did book_appointment succeed in this turn?
+    booked_ok = False
+    for tr in (tool_results or []):
+        if not isinstance(tr, dict):
+            continue
+        if tr.get("tool") != "book_appointment":
+            continue
+        out = tr.get("result") or tr.get("output") or {}
+        if isinstance(out, dict) and (out.get("success") is True or out.get("appointment_id")):
+            booked_ok = True
+            break
+    if booked_ok:
+        return reply_text
+
+    # No successful booking — scrub any claim of one.
+    claim_patterns_en = [
+        r"(?:your\s+)?appointment\s+(?:has\s+been\s+|is\s+|was\s+)?(?:successfully\s+)?booked",
+        r"(?:booking|appointment)\s+(?:has\s+been\s+)?confirmed",
+        r"i(?:'ve| have)\s+(?:successfully\s+)?booked",
+        r"i(?:'ve| have)\s+scheduled\s+your\s+appointment",
+        r"you(?:'re| are)\s+(?:now\s+)?booked",
+        r"done[,\.!]\s+you(?:'re| are)\s+booked",
+    ]
+    claim_patterns_ar = [
+        r"تم\s*حجز\s*(?:الموعد|موعد)",
+        r"تم\s*تأكيد\s*(?:الموعد|الحجز)",
+        r"حجزت\s*لك",
+        r"تمت\s*عملية\s*الحجز",
+    ]
+    hit = False
+    for p in claim_patterns_en:
+        if re.search(p, reply_text, re.IGNORECASE):
+            hit = True
+            break
+    if not hit:
+        for p in claim_patterns_ar:
+            if re.search(p, reply_text):
+                hit = True
+                break
+    if not hit:
+        return reply_text
+
+    # Replace with an honest prompt asking the patient to confirm.
+    if lang == "ar":
+        return ("لم يتم الحجز بعد. هل تؤكد أنك تريد حجز هذا الموعد "
+                "مع الطبيب في التاريخ والوقت المذكورين؟")
+    return ("The appointment is not booked yet. Please confirm the doctor, "
+            "date, and time so I can complete the booking.")
+
+
+def _strip_fake_cancel_claim(reply_text, tool_results, lang="en"):
+    """Rewrite the reply if it claims a successful cancellation without a matching
+    cancel_appointment tool success in this turn."""
+    import re
+    if not reply_text:
+        return reply_text
+
+    cancelled_ok = any(
+        isinstance(tr, dict) and tr.get("tool") == "cancel_appointment"
+        and isinstance(tr.get("result") or tr.get("output"), dict)
+        and (tr.get("result") or tr.get("output") or {}).get("success") is True
+        for tr in (tool_results or [])
+    )
+    if cancelled_ok:
+        return reply_text
+
+    cancel_patterns_en = [
+        r"(?:all\s+)?appointments?\s+(?:for\s+Dr\.?\s+\w+\s+)?(?:have\s+been|has\s+been|were|was)\s+(?:successfully\s+)?cancell?ed",
+        r"i(?:'ve| have)\s+cancell?ed\s+(?:your|the|all)",
+        r"(?:your\s+)?appointment\s+(?:has\s+been|was)\s+(?:successfully\s+)?cancell?ed",
+        r"cancell?ation\s+(?:was\s+)?(?:successful|confirmed|complete)",
+        r"done[,\.!]\s+(?:the\s+)?appointment\s+(?:has\s+been\s+)?cancell?ed",
+    ]
+    cancel_patterns_ar = [
+        r"تم\s*إلغاء\s*(?:جميع\s*)?المواعيد",
+        r"تم\s*إلغاء\s*الموعد",
+        r"ألغيت\s*(?:الموعد|مواعيد)",
+    ]
+    hit = any(re.search(p, reply_text, re.IGNORECASE) for p in cancel_patterns_en)
+    if not hit:
+        hit = any(re.search(p, reply_text) for p in cancel_patterns_ar)
+    if not hit:
+        return reply_text
+
+    if lang == "ar":
+        return "لم أتمكن من إلغاء الموعد. هل يمكنك تأكيد رقم الموعد؟"
+    return "I was unable to cancel the appointment. Could you confirm the appointment details?"
+
+
+def _detect_medical_emergency(user_text, lang="en"):
+    """Pre-LLM safety check: if the user's message matches a known red-flag
+    pattern, return a hard-coded triage reply that bypasses the agentic loop.
+    Returns (reply_text, label) or (None, None)."""
+    import re
+    t = (user_text or "").strip()
+    if not t:
+        return None, None
+    low = t.lower()
+    for pat_en, pat_ar, reply_en, reply_ar, label in _EMERGENCY_PATTERNS:
+        hit = False
+        if pat_en and re.search(pat_en, low, re.IGNORECASE):
+            hit = True
+        elif pat_ar and re.search(pat_ar, t):
+            hit = True
+        if hit:
+            return (reply_ar if lang == "ar" else reply_en), label
+    return None, None
 
 
 def _try_parse_raw_tool_call(text):
@@ -1624,10 +3111,31 @@ def _try_parse_raw_tool_call(text):
 
 
 def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
-                               voice_mode, tool_results_for_display):
+                               voice_mode, tool_results_for_display, lang="en"):
     """Ollama-based agentic loop with native structured tool calls — mirrors Claude's loop."""
     max_tokens = 512 if voice_mode else 1024
     max_iterations = 5
+
+    # Pre-loop intent hint: qwen often skips tools for profile/nav queries.
+    # Detect obvious intents and pin a system directive so the first turn
+    # emits the right tool call.
+    forced_tool = None
+    last_user_msg = next(
+        (m.get("content", "") for m in reversed(messages)
+         if m.get("role") == "user" and isinstance(m.get("content"), str)),
+        ""
+    )
+    detected = _detect_intent(last_user_msg, lang=lang)
+    if detected:
+        forced_tool = detected
+        messages = messages + [{
+            "role": "user",
+            "content": (
+                f"[SYSTEM DIRECTIVE] The patient's request requires the '{detected}' tool. "
+                f"Your next response MUST be a call to '{detected}' via the tool-call mechanism. "
+                f"Do NOT answer in plain text until you have the tool result."
+            )
+        }]
 
     for iteration in range(max_iterations):
         result = call_ollama(system_prompt, messages, max_tokens=max_tokens, tools=OLLAMA_TOOLS)
@@ -1654,7 +3162,40 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                     messages.append({"role": "assistant", "content": ""})
                     messages.append({"role": "tool", "content": json.dumps(tool_result)})
                     continue
-            return _clean_llm_output(result) or "Done.", tool_results_for_display
+
+            # Model narrated a tool intent in plain English instead of calling it.
+            # Inject a directive and retry so the tool actually executes.
+            narrated = _detect_narrated_tool_name(result)
+            if narrated:
+                print(f"[TOOL-OFFLINE-NARRATED] Model narrated '{narrated}' — injecting directive")
+                messages.append({"role": "assistant", "content": result})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM DIRECTIVE] You described calling '{narrated}' in words but did not "
+                        f"actually call it. You MUST call '{narrated}' NOW using the tool-call mechanism. "
+                        f"Do NOT write any text — just emit the tool call."
+                    )
+                })
+                continue
+
+            # Forced-intent retry: the intent detector is certain a tool is required
+            # but the model answered in plain text anyway. Force it once more.
+            tools_called = {t.get("tool") for t in tool_results_for_display}
+            if forced_tool and forced_tool not in tools_called and iteration <= 1:
+                print(f"[TOOL-OFFLINE-FORCED] Forcing '{forced_tool}' — model answered without calling it")
+                messages.append({"role": "assistant", "content": result})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM DIRECTIVE] You answered in plain text but the patient's question "
+                        f"requires calling '{forced_tool}' first. Call '{forced_tool}' NOW using the "
+                        f"tool-call mechanism. Do NOT write any text — just emit the tool call."
+                    )
+                })
+                continue
+
+            return _clean_llm_output(result, lang=lang) or "Done.", tool_results_for_display
 
         # Native tool call response
         text = result.get("text", "")
@@ -1682,23 +3223,136 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                     messages.append({"role": "tool", "content": json.dumps({"error": f"Unknown tool: {t_name}"})})
                     continue
 
+                # Loop guard: if the same tool has already been called 2+ times in this
+                # single user turn, the model is stuck in a repeat loop (observed in
+                # results.txt: 5× get_navigation_targets for 'helicopter landing pad').
+                # Stop executing, inject a directive, and force a final text answer.
+                prior_calls = sum(
+                    1 for tr in tool_results_for_display
+                    if isinstance(tr, dict) and tr.get("tool") == t_name
+                )
+                if prior_calls >= 2:
+                    print(f"[TOOL-OFFLINE-LOOP] '{t_name}' already called {prior_calls}x this turn — forcing final answer")
+                    messages.append({"role": "tool", "content": json.dumps({
+                        "error": f"Tool '{t_name}' already called {prior_calls} times this turn. Use previous results."
+                    })})
+                    messages.append({"role": "user", "content": (
+                        f"[SYSTEM DIRECTIVE] You have already called '{t_name}' multiple times. "
+                        f"Do NOT call any more tools. Write a final plain-text answer to the "
+                        f"patient using the information you already have. If the requested item "
+                        f"wasn't found, say so and suggest asking at reception."
+                    )})
+                    continue
+
                 print(f"[TOOL-OFFLINE] {t_name}({t_input})")
                 tool_result = execute_tool(t_name, t_input, user_id, user_name, role)
                 tool_results_for_display.append({"tool": t_name, "result": tool_result})
                 messages.append({"role": "tool", "content": json.dumps(tool_result)})
-                # If booking/cancellation failed, inject a directive so the model
-                # cannot hallucinate a success message
-                if t_name in ("book_appointment", "cancel_appointment") and tool_result.get("error"):
+
+                # Doctor list: pre-build formatted answer so qwen never echoes key names.
+                if t_name == "get_doctors" and not tool_result.get("error"):
+                    doc_list = tool_result.get("doctors", [])
+                    if doc_list:
+                        if lang == "ar":
+                            _items = "، ".join(
+                                f"د. {d['name']} ({d['specialty']})" for d in doc_list
+                            )
+                            _formatted = (
+                                f"الأطباء المتاحون: {_items}. من تفضل؟"
+                                if len(doc_list) > 1
+                                else f"الطبيب المتاح: {_items}."
+                            )
+                        else:
+                            _items = " | ".join(
+                                f"Dr. {d['name']} ({d['specialty']})" for d in doc_list
+                            )
+                            _formatted = (
+                                f"Available doctors: {_items}. Who would you prefer?"
+                                if len(doc_list) > 1
+                                else f"The available doctor is {_items}."
+                            )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"[SYSTEM DIRECTIVE] Doctor data loaded. Present this to the "
+                                f"patient in their language. If the patient described symptoms, "
+                                f"pick ONE doctor and briefly explain why they fit. "
+                                f"Otherwise state exactly: {_formatted}"
+                            )
+                        })
+
+                # Navigation: pre-compute matched location so model doesn't guess.
+                elif t_name == "get_navigation_targets" and not tool_result.get("error"):
+                    facilities = tool_result.get("facilities", [])
+                    offices    = tool_result.get("doctor_offices", [])
+                    user_q_lc  = (last_user_msg or "").lower()
+
+                    # Try to find a specific match from the user's query
+                    _matched = None
+                    for fac in facilities:
+                        fname = (fac.get("name") or "").lower()
+                        ftype = (fac.get("facility_type") or "").lower()
+                        kws = [w for w in (fname + " " + ftype).split() if len(w) >= 4]
+                        if any(kw in user_q_lc for kw in kws):
+                            _matched = (
+                                f"{fac['name']} is located at {fac.get('location', 'the hospital')}."
+                            )
+                            break
+                    if not _matched:
+                        for off in offices:
+                            oname = (off.get("name") or "").lower()
+                            kws = [w for w in oname.split() if len(w) >= 4]
+                            if any(kw in user_q_lc for kw in kws):
+                                _matched = (
+                                    f"{off['name']}'s office is at "
+                                    f"{off.get('location', 'the hospital')}."
+                                )
+                                break
+
+                    if _matched:
+                        _nav_directive = (
+                            f"[SYSTEM DIRECTIVE] Navigation result: {_matched} "
+                            f"Tell the patient exactly this location. "
+                            f"Do NOT list other locations or mention doctors."
+                        )
+                    else:
+                        _fac_lines = "; ".join(
+                            f"{f['name']}: {f.get('location','')}" for f in facilities[:10]
+                        )
+                        _nav_directive = (
+                            f"[SYSTEM DIRECTIVE] Hospital locations: {_fac_lines}. "
+                            f"Answer the patient's navigation question using ONLY this list. "
+                            f"Do NOT list doctor offices in response to a facility question."
+                        )
+                    messages.append({"role": "user", "content": _nav_directive})
+
+                # Booking/cancellation error: block hallucinated success and block substitute booking.
+                elif t_name == "book_appointment" and tool_result.get("error"):
                     messages.append({
                         "role": "user",
-                        "content": f"[SYSTEM DIRECTIVE] The {t_name} tool returned this error: \"{tool_result['error']}\". "
-                                   f"You MUST tell the patient that the action FAILED and explain exactly why. "
-                                   f"Do NOT say the appointment was booked or cancelled."
+                        "content": (
+                            f"[SYSTEM DIRECTIVE] The book_appointment tool returned this error: "
+                            f"\"{tool_result['error']}\". "
+                            f"You MUST tell the patient the booking FAILED and explain exactly why. "
+                            f"Do NOT say the appointment was booked. "
+                            f"Do NOT automatically try a different doctor or a different time — "
+                            f"wait for the patient to tell you what they want to do next."
+                        )
+                    })
+                elif t_name == "cancel_appointment" and tool_result.get("error"):
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM DIRECTIVE] The cancel_appointment tool returned this error: "
+                            f"\"{tool_result['error']}\". "
+                            f"You MUST tell the patient the cancellation FAILED and explain why. "
+                            f"Do NOT say the appointment was cancelled."
+                        )
                     })
             continue
 
         # Text response with no tool calls — final answer
-        return (_clean_llm_output(text) or "Done."), tool_results_for_display
+        return (_clean_llm_output(text, lang=lang) or "Done."), tool_results_for_display
 
     return "I processed your request.", tool_results_for_display
 
@@ -1721,19 +3375,22 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
             "Respond in Arabic. Accept Egyptian, Gulf, Levantine, or Modern Standard Arabic dialects. "
             "Always reply in the same dialect the patient used. Keep response under 60 words."
         ) if not voice_mode else (
-            "Reply in Arabic in 1-2 short spoken sentences. Match the patient's Arabic dialect."
+            "Reply in Arabic in 1-2 short spoken sentences. Match the patient's Arabic dialect. "
+            "Tool calls do not count toward the word limit — call tools first, then speak a short reply."
         )
     else:
         lang_note = ("Respond in English (under 80 words)." if not voice_mode else
-                     "Reply in English in 1-2 short spoken sentences suitable for text-to-speech.")
+                     "Reply in English in 1-2 short spoken sentences suitable for text-to-speech. "
+                     "Tool calls do not count toward the word limit — call tools first, then speak a short reply.")
 
     today = datetime.now().strftime('%Y-%m-%d')
     weekday = datetime.now().strftime('%A')
+    current_time = datetime.now().strftime('%H:%M')
 
     system_prompt = (
         f"You are Pepper, a friendly medical robot assistant at Andalusia Hospital.\n"
         f"Patient name: {user_name}.\n"
-        f"Today: {today} ({weekday}).\n"
+        f"Today: {today} ({weekday}). Current time: {current_time}.\n"
         f"\n{lang_note}\n"
         f"\nCRITICAL RULES:\n"
         f"1. You MUST call the appropriate tool for ANY action. NEVER pretend you performed an action without calling the tool.\n"
@@ -1744,7 +3401,117 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
         f"6. Format dates as YYYY-MM-DD and times as HH:MM (24-hour).\n"
         f"7. Write plain spoken sentences. NO markdown, NO asterisks, NO bullet points.\n"
         f"8. Be warm, empathetic, and concise.\n"
-        f"9. If you are unsure, ask the patient to clarify."
+        f"9. If you are unsure, ask the patient to clarify.\n"
+        f"10. NEVER say 'I will call', 'I'll call', 'let me call', 'can you call', 'let's check with', "
+        f"'we need to call', or describe any tool / parameter / function in words. "
+        f"Just call the tool directly. The patient must never see internal function or parameter names.\n"
+        f"11. NEVER guess a doctor's department from their name. If the user names a doctor, "
+        f"call get_doctors WITH NO department filter, then find the matching doctor by name. "
+        f"Only pass a department to get_doctors when the user explicitly names a department "
+        f"(e.g. 'find a cardiologist' -> department='Cardiology'). A doctor's name is NOT evidence of their specialty.\n"
+        f"12. When the user asks to book with a specific doctor by name, your FIRST tool call must be "
+        f"get_doctors() with no arguments (or get_doctor_schedule(doctor_name=...)). Do NOT call "
+        f"get_doctors with a guessed department.\n"
+        f"13. For ANY question about hospital navigation, guiding, rooms, offices, departments you "
+        f"can walk to, 'where is X', 'where can you take / guide me', 'how do I get to X', 'take me "
+        f"to X', 'lead me to X', or 'direct me to X' — your FIRST action MUST be "
+        f"get_navigation_targets. Never answer these questions from memory. Never invent room "
+        f"numbers or floors.\n"
+        f"14. Tool results are PRIVATE context for YOU. NEVER say phrases like 'Thank you for "
+        f"providing the JSON data', 'Based on this information', 'the dataset', 'the data you "
+        f"provided', or similar. The patient does not see any JSON. Speak as if you already know "
+        f"the answer, in plain natural language.\n"
+        f"15. Take the patient's time and date LITERALLY. If they say '03:00' that means 3 AM — do "
+        f"NOT silently change it to 15:00 (3 PM). If a time seems unlikely, ask the patient to "
+        f"confirm rather than reinterpreting it.\n"
+        f"16. For ANY question about the patient's OWN medical record — age, date of birth, blood "
+        f"type, allergies, medications, medical history, chronic conditions, past visits, or "
+        f"'what do you know about me' — your FIRST tool call MUST be get_patient_profile. "
+        f"Never reply 'I don't have that information' without calling get_patient_profile first.\n"
+        f"17. Booking intent is triggered by ANY of: 'book', 'schedule', 'reserve', 'make an "
+        f"appointment', 'احجز', 'موعد' — regardless of whether the user wrote 'Dr.' or 'Doctor' or "
+        f"no title at all, and regardless of the language. Arabic+English mixed names (e.g. "
+        f"'د. Ahmed Fouad') are valid doctor names — strip the honorific and pass the rest.\n"
+        f"18. After you see a tool result, reply in PLAIN natural language about what the patient "
+        f"asked. Do not mention 'JSON', 'data', 'provided', 'dataset', 'list', or 'entries'. "
+        f"Do not summarize the raw data structure. Answer the patient's actual question only.\n"
+        f"19. When the patient asks you to RECOMMEND a doctor (e.g. 'recommend a doctor', "
+        f"'suggest a specialist', 'who should I see', 'can you recommend a dermatologist'): "
+        f"you MUST call get_doctors FIRST. If a specialty is implied by the request or by the "
+        f"patient's medical profile, pass it as the department. Then pick a doctor FROM THE "
+        f"RETURNED LIST by their real specialty — NEVER invent a name or a specialty. If the "
+        f"returned list is empty, say so and offer a related specialty.\n"
+        f"20. NEVER claim a doctor belongs to a specialty that does not match their 'specialty' "
+        f"field in the tool result. The tool result is authoritative. If you have not called "
+        f"get_doctors or get_doctor_schedule in the current turn, you do NOT know any doctor's "
+        f"specialty — call the tool instead of guessing.\n"
+        f"21. HARD RULE — NEVER invent doctor names. A name must come from a tool result in the "
+        f"current turn. Do NOT pull names from memory, from the patient's history, or from "
+        f"common Arabic/Egyptian name patterns. If you list multiple doctors, every name must "
+        f"appear verbatim in the most recent get_doctors or get_navigation_targets result.\n"
+        f"22. HARD RULE — If get_patient_profile returns an empty or missing field (allergies, "
+        f"medications, medical history, blood type, age, DOB), say 'I don't have that on file' "
+        f"and offer to update it. NEVER fabricate a value. NEVER say 'you are already taking X' "
+        f"or 'your medications include X' unless X is literally in the tool result.\n"
+        f"23. For navigation/location questions, use get_navigation_targets. Answer from the "
+        f"'facilities' list for pharmacy/lab/ICU/ER/bathroom/reception/cafeteria questions, and "
+        f"from 'doctor_offices' ONLY when the patient named a doctor. If a facility is NOT in "
+        f"the result, say 'I'm not sure — please ask at reception' instead of guessing a room.\n"
+        f"24. The current clock time is in the system header above. If asked 'what time is it', "
+        f"use that value exactly. Do NOT invent a time.\n"
+        f"25. NEVER say 'your appointment has been booked' or 'booking confirmed' unless the "
+        f"MOST RECENT tool result in this turn was book_appointment with success=true. If you "
+        f"only called get_doctor_schedule or get_doctors, you have NOT booked anything — "
+        f"propose the time and ask the patient to confirm before calling book_appointment.\n"
+        f"26. LANGUAGE PURITY — if replying in English, use only Latin script. If replying in "
+        f"Arabic, use only Arabic script + Latin for doctor/place names. NEVER mix Chinese, "
+        f"Japanese, Korean, Hebrew, or Cyrillic characters into the reply.\n"
+        f"27. RECOMMEND WITH NO DELAY — when the patient says 'recommend a [specialty]' or names "
+        f"ANY specialty (e.g. 'general practitioner', 'cardiologist', 'dermatologist', 'GP'), "
+        f"do NOT ask for clarification. Immediately call get_doctors with that specialty as the "
+        f"department, then pick the best match from the returned list and recommend them by name. "
+        f"Only ask for clarification when the patient says only 'recommend a doctor' with NO "
+        f"specialty AND their profile has no relevant conditions.\n"
+        f"28. PROACTIVE RECOMMENDATION — when the patient asks 'recommend a doctor' without naming "
+        f"a specialty, look at their medical profile (injected above) for chronic conditions, "
+        f"then call get_doctors with the most relevant specialty (e.g. Hashimoto's → "
+        f"'Endocrinology', depression → 'Psychiatry', IBS → 'Gastroenterology'). "
+        f"Do NOT ask what specialty unless the profile is completely empty.\n"
+        f"29. DOCTOR LIST FORMATTING — when get_doctors returns 'reply_ar' and "
+        f"'reply_en' fields: use 'reply_ar' if replying in Arabic, use "
+        f"'reply_en' if replying in English. NEVER join names yourself — doing so "
+        f"produces runs like 'Sameh RadwanNeveen Darwish' with no spaces. NEVER reply in "
+        f"Arabic when the patient spoke English, and vice versa.\n"
+        f"30. DIALECT ARABIC — phrases like 'رشح لي'، 'ارشحلي'، 'وصيلي'، 'حسب حالتي' all mean "
+        f"'recommend to me'. Treat them exactly like 'recommend a doctor' and call get_doctors "
+        f"immediately using the patient's profile to choose the best specialty.\n"
+        f"31. BOOKING FAILURE — if book_appointment returns an error for ANY reason (wrong "
+        f"day, slot taken, past date, etc.), tell the patient exactly what failed and STOP. "
+        f"Do NOT automatically try a different doctor or a different time slot. "
+        f"Do NOT call book_appointment again until the patient explicitly tells you what "
+        f"they want to change.\n"
+        f"32. LISTING APPOINTMENTS — if the patient says anything like 'what are my "
+        f"appointments', 'show me my appointments', 'do I have any appointments', "
+        f"ALWAYS call get_my_appointments. This is NEVER a booking confirmation — "
+        f"treat it as a fresh list request regardless of any prior booking context.\n"
+        f"33. CANCEL WITHOUT ID — if the patient asks to cancel an appointment without "
+        f"giving a numeric appointment ID, call get_my_appointments FIRST to find their "
+        f"appointments, then identify the matching one by doctor/date/time from the "
+        f"patient's description, then call cancel_appointment with that ID. "
+        f"NEVER ask the patient for an appointment ID — they will not know it.\n"
+        f"34. PAST DATE GUARD — before calling book_appointment, check that the requested "
+        f"date is on or after today ({today}). If the date is in the past, tell the patient "
+        f"that date has already passed and ask them to choose a future date. "
+        f"Do NOT call book_appointment with a past date.\n"
+        f"35. CANCEL HONESTY — NEVER say 'cancelled', 'deleted', 'removed', or any word "
+        f"implying a cancellation was performed unless the most recent tool result is "
+        f"cancel_appointment with success=true. If you only called get_doctor_schedule "
+        f"or get_my_appointments, you have NOT cancelled anything.\n"
+        f"36. SYMPTOM ROUTING — when a patient describes symptoms and asks which doctor "
+        f"or department to see, identify the correct specialty (chest pain→Cardiology, "
+        f"knee pain→Orthopedics, headache+dizziness→Neurology, skin issue→Dermatology, "
+        f"etc.) then call get_doctors with that specialty. NEVER name a specific doctor "
+        f"before you have called get_doctors and seen the result in this turn."
     )
 
     # ---- FAISS RAG: inject relevant hospital knowledge ----
@@ -1797,7 +3564,7 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
     if OFFLINE_MODE:
         return _run_agentic_loop_offline(
             system_prompt, claude_messages, user_id, user_name, role,
-            voice_mode, tool_results_for_display)
+            voice_mode, tool_results_for_display, lang=lang)
 
     # ---- ONLINE MODE: Claude with native tool use ----
     headers = {
@@ -1875,6 +3642,25 @@ def api_chat_ai():
     role      = session.get('role', 'guest')
 
     try:
+        # --- Safety pre-check: short-circuit known medical emergencies ---
+        # The LLM is unreliable for life-threatening red flags (anaphylaxis,
+        # stroke, overdose). Give a hard-coded triage reply and skip the loop.
+        emergency_reply, emergency_label = _detect_medical_emergency(user_text, lang=lang)
+        if emergency_reply:
+            _slog("chat_message", patient_name=user_name, patient_id=user_id,
+                  success=True, lang=lang,
+                  user_said=user_text[:200], ai_replied=emergency_reply[:300],
+                  emergency=emergency_label, tools_used=[])
+            return jsonify({
+                "success": True,
+                "answer": emergency_reply,
+                "tool_results": [],
+                "sentiment": {"sentiment": "urgent", "label": emergency_label},
+                "ner": [],
+                "consensus": None,
+                "emergency": emergency_label,
+            })
+
         # --- Run AI enrichment in parallel context ---
         # 1. Sentiment analysis
         sentiment = sentiment_analyzer.analyze(user_text, lang)
@@ -1888,11 +3674,46 @@ def api_chat_ai():
         mem = ConversationMemory(db, PatientMemory)
         memory_ctx = mem.get_context(user_id) if user_id else ""
 
+        # 4. Multi-agent consensus for high-stakes messages
+        consensus = None
+        if multi_agent_system.should_activate(user_text):
+            try:
+                patient_meds = []
+                if user_id:
+                    pt = Patient.query.get(user_id)
+                    if pt and pt.current_medications:
+                        patient_meds = [m.strip() for m in pt.current_medications.split(",") if m.strip()]
+                dc = DrugChecker(db, Medication, DrugInteraction)
+                consensus = multi_agent_system.consult(
+                    patient_context=memory_ctx,
+                    user_message=user_text,
+                    drug_checker=dc,
+                    medications=patient_meds,
+                )
+            except Exception as _e:
+                print(f"[MULTI-AGENT] Error: {_e}")
+
         final_text, tool_results = run_agentic_loop(
             user_text, user_id, user_name, role, lang=lang,
             history=history, voice_mode=False,
             sentiment=sentiment, ner_entities=ner_entities, memory_ctx=memory_ctx
         )
+
+        # Guard against fabricated booking confirmations: if the reply claims
+        # a successful booking but book_appointment wasn't actually invoked
+        # with success, rewrite the reply. qwen sometimes hallucinates
+        # "تم حجز موعد" / "your appointment has been booked" after only a
+        # schedule lookup.
+        final_text = _strip_fake_booking_claim(final_text, tool_results, lang=lang)
+        # Similarly guard against false cancellation claims.
+        final_text = _strip_fake_cancel_claim(final_text, tool_results, lang=lang)
+
+        # If multi-agent produced a richer recommendation, prefer it —
+        # but only when the agentic loop took no side-effecting actions,
+        # otherwise the patient needs to see what tools actually did.
+        if consensus and consensus.get("final_recommendation") and not tool_results:
+            final_text = consensus["final_recommendation"]
+
         _slog("chat_message", patient_name=user_name, patient_id=user_id,
               success=True, lang=lang,
               user_said=user_text[:200],
@@ -1904,7 +3725,8 @@ def api_chat_ai():
             "answer": final_text,
             "tool_results": tool_results,
             "sentiment": sentiment,
-            "ner": ner_entities
+            "ner": ner_entities,
+            "consensus": consensus,
         })
     except Exception as e:
         print(f"[CHAT ERROR] {e}")
@@ -2273,6 +4095,42 @@ def api_camera_snapshot_b64():
         return jsonify({"error": "Camera server returned " + str(r.status_code)}), 503
     except Exception as e:
         return jsonify({"error": "Camera server not reachable: " + str(e)}), 503
+
+@app.route("/api/camera/mjpeg", methods=["GET"])
+def api_camera_mjpeg():
+    """Proxy: stream the camera server's MJPEG multipart feed.
+    Using a persistent multipart stream removes the per-frame HTTP
+    round-trip that made tablet preview laggy."""
+    try:
+        upstream = requests.get(
+            f"http://127.0.0.1:{CAM_SERVER_PORT}/mjpeg",
+            stream=True, timeout=(3, None))
+    except Exception as e:
+        return jsonify({"error": "Camera server not reachable: " + str(e)}), 503
+    if upstream.status_code != 200:
+        return jsonify({"error": "Camera server returned " + str(upstream.status_code)}), 503
+
+    content_type = upstream.headers.get(
+        "Content-Type", "multipart/x-mixed-replace; boundary=pepperframe")
+
+    def _gen():
+        try:
+            for chunk in upstream.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        except Exception:
+            return
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    return Response(_gen(), mimetype=content_type, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate, private",
+        "Pragma": "no-cache",
+        "Connection": "close",
+    })
 
 # --- FACE ENROLL ---
 @app.route("/api/face_enroll", methods=["POST"])
@@ -2912,6 +4770,183 @@ def api_triage_history():
             "disposition":         t.disposition,
         })
     return jsonify({"success": True, "history": result, "total": len(result)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ENDPOINTS — Feature 1: Acoustic Analysis (standalone)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/acoustic/analyze", methods=["POST"])
+def api_acoustic_analyze():
+    """
+    Analyse an uploaded .wav for vocal biomarkers.
+    Accepts multipart/form-data with key 'file'.
+    Returns cough, wheeze, breathlessness, pain, and distress scores.
+    """
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No audio file provided."}), 400
+    import tempfile as _tmp
+    f   = request.files["file"]
+    tmp = _tmp.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    f.save(tmp.name)
+    try:
+        result = acoustic_analyzer.analyze(tmp.name)
+        return jsonify({"success": True, **result})
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ENDPOINTS — Feature 2: Pose Analysis
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/pose/analyze", methods=["POST"])
+def api_pose_analyze():
+    """
+    One-shot pose analysis of a single base64 JPEG frame.
+    Body: { "image": "<data-uri or raw base64>" }
+    Returns distress_pose, stroke_risk, gait_analysis, and alerts.
+    """
+    data  = request.get_json(force=True) or {}
+    image = data.get("image", "")
+    if not image:
+        return jsonify({"success": False, "error": "No image provided."}), 400
+    result = pose_analyzer.analyze_frame(image)
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/pose/start", methods=["POST"])
+def api_pose_start():
+    """Start continuous pose monitoring on the server's camera."""
+    if session.get("role") not in ("staff", "admin"):
+        return jsonify({"success": False, "error": "Staff access required."}), 403
+    data  = request.get_json(force=True) or {}
+    cam   = int(data.get("camera_index", 0))
+    return jsonify(pose_analyzer.start(cam))
+
+
+@app.route("/api/pose/stop", methods=["POST"])
+def api_pose_stop():
+    """Stop continuous pose monitoring."""
+    if session.get("role") not in ("staff", "admin"):
+        return jsonify({"success": False, "error": "Staff access required."}), 403
+    return jsonify(pose_analyzer.stop())
+
+
+@app.route("/api/pose/alerts", methods=["GET"])
+def api_pose_alerts():
+    """Return accumulated pose alerts (clears log by default)."""
+    clear = request.args.get("clear", "true").lower() != "false"
+    return jsonify({"success": True, "alerts": pose_analyzer.get_alerts(clear=clear)})
+
+
+@app.route("/api/pose/status", methods=["GET"])
+def api_pose_status():
+    return jsonify({"success": True, **pose_analyzer.status()})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ENDPOINTS — Feature 4: Clinical Predictions
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/predict/readmission", methods=["POST"])
+def api_predict_readmission():
+    """
+    Predict ER readmission risk for the logged-in patient (or arbitrary features).
+
+    Body (all optional — missing values are imputed):
+    {
+      "triage_level":  int 1-4,
+      "pain_score":    int 0-10,
+      "heart_rate":    int bpm,
+      "systolic_bp":   int mmHg,
+      "diastolic_bp":  int mmHg,
+      "oxygen_sat":    float %,
+      "temperature":   float °C,
+      "age":           int,
+      "prior_visits":  int,
+      "symptom_count": int
+    }
+    """
+    data     = request.get_json(force=True) or {}
+    user_id  = session.get("user_id")
+
+    # Auto-fill age from patient record if logged in and not supplied
+    if user_id and data.get("age") is None:
+        pt = Patient.query.get(user_id)
+        if pt and pt.age:
+            data["age"] = pt.age
+
+    # Auto-fill prior visit count
+    if user_id and data.get("prior_visits") is None:
+        data["prior_visits"] = TriageHistory.query.filter_by(
+            patient_id=user_id
+        ).count()
+
+    result = readmission_predictor.predict(data)
+    _slog("readmission_prediction", patient_id=user_id, success=True,
+          risk_level=result.get("risk_level"), probability=result.get("probability"))
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/predict/wait", methods=["POST"])
+def api_predict_wait():
+    """
+    ML-enhanced wait time prediction.
+
+    Body:
+    {
+      "doctor_id":     int,
+      "triage_level":  int 1-4,
+      "specialty":     str  (optional — looked up from doctor if omitted)
+    }
+    """
+    data       = request.get_json(force=True) or {}
+    doctor_id  = data.get("doctor_id")
+    triage     = int(data.get("triage_level", 3))
+    specialty  = data.get("specialty", "")
+
+    # Count appointments ahead right now
+    ahead = 0
+    if doctor_id:
+        now  = datetime.now()
+        ahead = Appointment.query.filter(
+            Appointment.doctor_id        == doctor_id,
+            Appointment.appointment_date == now.date(),
+            Appointment.time_slot        >= now.time(),
+        ).count()
+        if not specialty:
+            doc = Doctor.query.get(doctor_id)
+            if doc:
+                specialty = doc.specialty
+
+    result = dynamic_wait_estimator.estimate(
+        appointments_ahead=ahead,
+        triage_level=triage,
+        specialty=specialty,
+    )
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/predict/retrain", methods=["POST"])
+def api_predict_retrain():
+    """
+    Retrain prediction models on current DB data.
+    Staff only.  Runs in a background thread — returns immediately.
+    """
+    if session.get("role") not in ("staff", "admin"):
+        return jsonify({"success": False, "error": "Staff access required."}), 403
+
+    import threading as _t
+    def _retrain():
+        with app.app_context():
+            r_res = readmission_predictor.retrain(db, VitalRecord, TriageHistory, Patient)
+            w_res = dynamic_wait_estimator.retrain(db, Appointment, Schedule, Doctor)
+            print(f"[RETRAIN] Readmission: {r_res}  Wait: {w_res}")
+
+    _t.Thread(target=_retrain, daemon=True).start()
+    return jsonify({"success": True, "message": "Retraining started in background."})
 
 
 if __name__ == "__main__":

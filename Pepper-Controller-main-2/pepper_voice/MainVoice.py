@@ -2,8 +2,14 @@
 from naoqi import ALProxy
 import time
 import os
+import json
 import subprocess
 import requests
+
+try:
+    from websocket import create_connection as _ws_connect
+except ImportError:
+    _ws_connect = None
 
 # Python 2/3 compatible text type check
 try:
@@ -20,14 +26,39 @@ PEPPER_PORT = int(os.environ.get("ROBOT_PORT", "9559"))
 
 SERVER_IP = os.environ.get("SERVER_IP", "127.0.0.1")
 SERVER_PORT = os.environ.get("SERVER_PORT", "8080")
+WS_PORT   = os.environ.get("WS_PORT", "8765")
 
 # Dynamically construct the backend URL
 SERVER_URL = "http://{}:{}/api/process_audio".format(SERVER_IP, SERVER_PORT)
+WS_URL     = "ws://{}:{}".format(SERVER_IP, WS_PORT)
+
+
+def broadcast_voice_result(user_text, ai_text, lang):
+    """Push transcript + reply to the WS bridge so the tablet UI can show
+    it on-screen the instant TTS starts speaking. Never raises.
+    """
+    if _ws_connect is None:
+        return
+    try:
+        ws = _ws_connect(WS_URL, timeout=3)
+        ws.send(json.dumps({
+            "type":      "result",
+            "user_text": user_text or "",
+            "ai_text":   ai_text or "",
+            "lang":      lang or "en",
+        }))
+        try:
+            ws.close()
+        except Exception:
+            pass
+    except Exception as e:
+        print("[WS] Could not broadcast voice result: {}".format(e))
 
 LOCAL_FILE = "voice.wav"
 PEPPER_FILE = "/tmp/voice.wav"
 FLAG_FILE = "voice_start.flag"  # Added for automated trigger
 LANG_FLAG_FILE = "lang.flag"    # Language preference from UI (en/ar)
+USER_FLAG_FILE = "user.flag"    # Logged-in patient ID written by nav_bridge
 
 PSCP = r"C:\Program Files\PuTTY\pscp.exe"
 
@@ -79,6 +110,18 @@ def get_ui_lang():
         pass
     return "en"
 
+def get_ui_user_id():
+    """Read logged-in patient ID from flag file written by nav_bridge."""
+    try:
+        if os.path.exists(USER_FLAG_FILE):
+            with open(USER_FLAG_FILE, "r") as f:
+                uid = f.read().strip()
+            if uid:
+                return uid
+    except Exception:
+        pass
+    return ""
+
 def set_tts_language(lang):
     """Switch Pepper TTS engine to Arabic or English."""
     try:
@@ -108,9 +151,9 @@ def record_audio():
     print("[INFO] Recording done. Transferring audio...")
 
     # Use a list — never a shell string — to prevent command injection
-    subprocess.run(
-        [PSCP, "-pw", "nao", "nao@{}:{}".format(PEPPER_IP, PEPPER_FILE), LOCAL_FILE],
-        check=False
+    # subprocess.call() is used (not .run()) for Python 2.7 / NAOqi compatibility
+    subprocess.call(
+        [PSCP, "-pw", "nao", "nao@{}:{}".format(PEPPER_IP, PEPPER_FILE), LOCAL_FILE]
     )
 
 # -------------------------------------------------------
@@ -228,14 +271,22 @@ def is_backend_reachable():
 # SEND AUDIO TO BACKEND
 # -------------------------------------------------------
 def process_backend():
+    """Send the recorded audio to Flask and return (user_text, reply).
+
+    reply is None when the backend is unreachable so the caller can fall
+    back to offline recognition.
+    """
     if not os.path.exists(LOCAL_FILE):
         print("[ERROR] File was not transferred.")
-        return "Audio transfer failed."
+        return ("", "Audio transfer failed.")
 
-    lang = get_ui_lang()
+    lang    = get_ui_lang()
+    user_id = get_ui_user_id()
     with open(LOCAL_FILE, "rb") as f:
         files = {"file": ("voice.wav", f, "audio/wav")}
         form_data = {"lang": lang}
+        if user_id:
+            form_data["patient_id"] = user_id
         try:
             r = requests.post(SERVER_URL, files=files, data=form_data, timeout=120)
             data = r.json()
@@ -245,17 +296,17 @@ def process_backend():
 
             if text == "":
                 print("[WARN] Empty transcription received.")
-                return "I did not hear anything. Please repeat."
+                return ("", "I did not hear anything. Please repeat.")
 
             if reply == "":
-                return "I am having trouble processing your request."
+                return (text, "I am having trouble processing your request.")
 
-            return reply
+            return (text, reply)
 
         except Exception as e:
             print("[ERROR] Backend failure:", e)
             print("[INFO] Falling back to offline voice recognition...")
-            return None  # Signal to use offline fallback
+            return ("", None)  # Signal to use offline fallback
 
 # -------------------------------------------------------
 # MAIN LOOP – FILE-FLAG IPC MECHANISM
@@ -274,11 +325,13 @@ while True:
         try:
             print("[INFO] Starting voice interaction...")
 
+            user_text = ""
+
             # Check if backend is reachable; choose online or offline path
             if is_backend_reachable():
                 record_audio()
                 print("[INFO] Processing speech via backend...")
-                reply = process_backend()
+                user_text, reply = process_backend()
 
                 # If backend call failed mid-request, fall back to offline
                 if reply is None:
@@ -293,12 +346,17 @@ while True:
             except UnicodeEncodeError:
                 print("[PEPPER REPLY]: (non-ASCII reply, cannot display in console)")
 
+            # Push the transcript + reply to the tablet BEFORE speaking so
+            # the UI shows the text while Pepper talks.
+            ui_lang = get_ui_lang()
+            broadcast_voice_result(user_text, reply, ui_lang)
+
             # ALWAYS convert to UTF-8 to prevent NAOqi crash (Python 2/3 safe)
             if isinstance(reply, _text_type):
                 reply = reply.encode("utf-8")
 
             # Set TTS language based on UI preference before speaking reply
-            set_tts_language(get_ui_lang())
+            set_tts_language(ui_lang)
             tts.say(reply)
             print("[INFO] Interaction complete. Returning to polling state...\n")
 

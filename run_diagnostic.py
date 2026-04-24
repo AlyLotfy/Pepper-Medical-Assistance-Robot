@@ -99,7 +99,7 @@ class TeeLogger(object):
 
     def __init__(self, log_path):
         self._terminal = sys.stdout
-        self._log = open(log_path, "w", buffering=1)
+        self._log = open(log_path, "w", buffering=1, encoding="utf-8")
 
     def write(self, message):
         # Strip ANSI codes from log file (clean text)

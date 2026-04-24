@@ -124,7 +124,7 @@
 
         <a class="tile --primary" href="qr_checkin.html"><span data-i18n="qr_checkin">QR Check-In</span></a>
         <a class="tile --primary" href="about.html"><span data-i18n="about">About</span></a>
-        <a class="tile --primary" id="tileFaceId" href="face_enroll.html"><span>&#128247; Link Face ID</span></a>
+        <a class="tile --primary" id="tileFaceId" href="face_enroll.html"><span data-i18n="link_face_id">Link Face ID</span></a>
       </div>
 
       <div class="pagination-bar">
@@ -197,7 +197,7 @@
         if (me.role === 'staff') {
           extraBtn = '<a href="staff_dashboard.html" class="auth-btn" style="margin-right:8px;">' + I18N.t("staff_dashboard") + '</a>';
         } else if (me.role === 'patient') {
-          extraBtn = '<a href="face_enroll.html" class="auth-btn" style="margin-right:8px;" title="Link your face for auto-login">&#128247; Face ID</a>';
+          extraBtn = '<a href="face_enroll.html" class="auth-btn" style="margin-right:8px;" title="Link your face for auto-login">Face ID</a>';
         }
         container.innerHTML =
           '<span style="margin-right:10px; font-weight:600; color:#5a4a3b;">' + I18N.t("hello_user") + me.name + '</span>' +
@@ -254,14 +254,27 @@
           var msg = JSON.parse(event.data);
           if (msg.type === 'result') {
             var display = document.getElementById('voiceDisplay');
+            // Escape HTML so a reply containing '<' or '&' renders correctly
+            function esc(s) {
+              return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                              .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
             if (display) {
               display.innerHTML =
-                "<div style='font-size:20px;color:#999;margin-bottom:5px;'>You: \"" + msg.user_text + "\"</div>" +
-                "<div style='font-size:26px;color:#5a4a3b;font-weight:600;'>Pepper: \"" + msg.ai_text + "\"</div>";
+                "<div style='font-size:20px;color:#999;margin-bottom:5px;'>You: \"" + esc(msg.user_text) + "\"</div>" +
+                "<div style='font-size:26px;color:#5a4a3b;font-weight:600;'>Pepper: \"" + esc(msg.ai_text) + "\"</div>";
             }
             var vs2 = document.getElementById('voiceStatus');
-            if (vs2) vs2.textContent = I18N.t('ready');
+            if (vs2) vs2.textContent = I18N.t('speaking') || 'Speaking…';
             resetMicButton();
+
+            // Estimate how long Pepper will take to speak (~ 80ms per char,
+            // min 2.5s). After that, reset the status back to "ready".
+            var speakMs = Math.max(2500, (msg.ai_text || '').length * 80);
+            setTimeout(function () {
+              var vs3 = document.getElementById('voiceStatus');
+              if (vs3) vs3.textContent = I18N.t('ready');
+            }, speakMs);
           }
         } catch (e) {}
       };
@@ -283,7 +296,8 @@
     }
 
     if (!isRecording) {
-      ws.send(JSON.stringify({ type: 'start_recording', lang: I18N.getLang() }));
+      var _me = (window.STORE && STORE.me) ? STORE.me() : null;
+      ws.send(JSON.stringify({ type: 'start_recording', lang: I18N.getLang(), user_id: (_me && _me.id) ? _me.id : null }));
       isRecording = true;
       if (btn)     { btn.textContent = I18N.t('stop_recording'); btn.style.background = '#d9534f'; }
       if (status)  status.textContent = I18N.t('listening');

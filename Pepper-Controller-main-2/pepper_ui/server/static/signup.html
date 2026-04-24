@@ -141,22 +141,39 @@
     btn.disabled = true;
     showError('');
 
-    if (!window.STORE || !STORE.signup) {
-      btn.disabled = false; btn.textContent = 'Sign Up';
-      showError('Demo store missing.');
-      return;
-    }
-
-    var resp = STORE.signup(currentRole, name, id, pass);
-    btn.disabled = false;
-    btn.textContent = I18N.t('sign_up');
-
-    if (resp && resp.success) {
-      alert(I18N.t('account_created'));
-      window.location.href = 'login.html';
-    } else {
-      showError((resp && resp.error) ? resp.error : 'Signup Failed');
-    }
+    // Persist to the server DB (source of truth). localStorage mirror is
+    // updated only after the server confirms, so the two can't drift.
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/signup', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_up');
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      if (data && data.success) {
+        if (window.STORE && STORE.signup) { STORE.signup(currentRole, name, id, pass); }
+        alert(I18N.t('account_created'));
+        window.location.href = 'login.html';
+      } else {
+        showError((data && data.error) ? data.error : 'Signup Failed');
+      }
+    };
+    xhr.ontimeout = function () {
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_up');
+      showError('Server timed out. Please try again.');
+    };
+    xhr.onerror = function () {
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_up');
+      showError('Server unreachable. Please try again.');
+    };
+    var body = { role: currentRole, id: id, name: name, password: pass };
+    if (currentRole === 'patient' && caseNum) body.case_number = caseNum;
+    xhr.send(JSON.stringify(body));
   }
 
   if (window.I18N) I18N.applyI18n();

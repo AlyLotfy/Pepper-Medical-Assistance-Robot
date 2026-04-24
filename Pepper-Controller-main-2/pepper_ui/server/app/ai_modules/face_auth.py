@@ -29,7 +29,9 @@ class FaceAuth:
         self.recognizer = None
         self.detector   = None
         self.labels     = {}
-        self.threshold  = 80
+        # LBPH confidence: lower = better match. 80 rejected most legitimate
+        # matches under varied lighting; 110 is the sweet spot in practice.
+        self.threshold  = 110
 
         if not CV2_OK:
             print("[FACE_AUTH] OpenCV not available — face login disabled.")
@@ -143,13 +145,17 @@ class FaceAuth:
         try:
             label, confidence = self.recognizer.predict(face)
             # LBPH: lower confidence = better match
+            print(f"[FACE_AUTH] Predict -> label={label} confidence={confidence:.1f} "
+                  f"threshold={self.threshold}")
             if confidence <= self.threshold and label in self.labels:
                 patient_id = self.labels[label]
                 print(f"[FACE_AUTH] Recognized patient {patient_id} (confidence={confidence:.1f})")
                 return {"success": True, "patient_id": patient_id,
                         "confidence": round(float(confidence), 2)}
             else:
-                return {"success": False, "error": "Face not recognized.",
+                return {"success": False,
+                        "error": f"Face not recognized (confidence {confidence:.0f}, "
+                                 f"threshold {self.threshold}).",
                         "confidence": round(float(confidence), 2)}
         except Exception as e:
             print(f"[FACE_AUTH] Recognition error: {e}")

@@ -31,6 +31,8 @@ Nao_Pepper/
 # --- Secrets / Config ---
 .env
 *.env
+# Network/Whisper config — per-machine IPs; copy from config.example.json
+config.json
 
 # --- Databases (contain patient data — never commit) ---
 *.db
@@ -58,9 +60,11 @@ rag_index.faiss
 rag_meta.json
 lang.flag
 
-# --- Face Recognition Runtime Data ---
-ai_modules/face_data/face_model.xml
-ai_modules/face_data/labels.json
+# --- Face Recognition Runtime Data (PII — rebuilt on enrollment) ---
+# Match face_data anywhere in the tree, not just repo root.
+**/face_data/face_model.xml
+**/face_data/labels.json
+**/face_data/faces/
 face_db/
 
 # --- IDE / OS ---
@@ -97,6 +101,25 @@ pepper_ui.zip
 # --- Logs ---
 *.log
 logs/
+diagnostic_logs/
+session_logs/
+
+# --- Test output ---
+results.json
+results.txt
+results.*.json
+results.*.txt
+
+# --- Runtime flag files ---
+*.flag
+user.flag
+voice_start.flag
+voice_done.flag
+
+# --- macOS metadata junk ---
+__MACOSX/
+**/__MACOSX/
+._*
 
 # --- Jupyter ---
 .ipynb_checkpoints/

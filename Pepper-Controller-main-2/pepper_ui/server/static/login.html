@@ -88,7 +88,7 @@
   </div>
   <div style="margin-top:14px;">
     <a href="face_login.html" style="display:inline-block;padding:12px 24px;background:#f0ebe3;border-radius:12px;color:#5a4a3b;font-size:14px;text-decoration:none;border:1px solid #d5c5b0;">
-      &#128247; Login with Face Recognition
+      Login with Face Recognition
     </a>
   </div>
 </div>
@@ -131,37 +131,45 @@
     btn.disabled = true;
     showError('');
 
-    if (!window.STORE || !STORE.login) {
-      btn.disabled = false; btn.textContent = I18N.t('sign_in');
-      showError('Demo store missing.');
-      return;
-    }
-
-    var resp = STORE.login(currentRole, id, pass);
-
-    if (resp && resp.success) {
-      // Sync Flask session so backend AI endpoints get patient context
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/login', true);
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4) {
-          btn.disabled = false;
-          btn.textContent = I18N.t('sign_in');
-          window.location.href = 'index.html';
-        }
-      };
-      xhr.onerror = function () {
-        btn.disabled = false;
-        btn.textContent = I18N.t('sign_in');
-        window.location.href = 'index.html';
-      };
-      xhr.send(JSON.stringify({ role: currentRole, id: id, password: pass }));
-    } else {
+    // Server is the source of truth: authenticate against the Flask DB.
+    // localStorage is updated only on server success, so they stay in sync.
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/login', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
       btn.disabled = false;
       btn.textContent = I18N.t('sign_in');
-      showError((resp && resp.error) ? resp.error : 'Login Failed');
-    }
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      if (data && data.success) {
+        // Server is source of truth. Write the session directly from the
+        // server response so accounts that exist only in the backend DB
+        // (not in the localStorage demo seed) still get a welcome.
+        if (window.STORE) {
+          if (STORE.setSession) {
+            STORE.setSession(currentRole, id, data.name, data.case_number);
+          } else if (STORE.login) {
+            STORE.login(currentRole, id, pass);
+          }
+        }
+        window.location.href = 'index.html';
+      } else {
+        showError((data && data.error) ? data.error : 'Invalid ID or Password');
+      }
+    };
+    xhr.ontimeout = function () {
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_in');
+      showError('Server timed out. Please try again.');
+    };
+    xhr.onerror = function () {
+      btn.disabled = false;
+      btn.textContent = I18N.t('sign_in');
+      showError('Server unreachable. Please try again.');
+    };
+    xhr.send(JSON.stringify({ role: currentRole, id: id, password: pass }));
   }
 
   if (window.I18N) I18N.applyI18n();
