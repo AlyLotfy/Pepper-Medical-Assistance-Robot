@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 Pepper Medical Assistance Robot
+#  Pepper Medical Assistance Robot
 
 **An intelligent humanoid hospital receptionist for Andalusia Hospital Group**
 **AAST Computer Engineering — Graduation Project, 2025/2026**
@@ -18,7 +18,7 @@
 
 ---
 
-## 🎯 What This Is
+##  What This Is
 
 Pepper Medical Assistance Robot transforms a **SoftBank Pepper humanoid** into a fully functional, bilingual (Arabic / English) hospital receptionist deployed at **Andalusia Hospital Group**. Patients walk up, get recognized by face, talk to the robot in their own language, book appointments, get triaged, and are physically guided to the right department — all on a local network with **no cloud dependency** in offline mode.
 
@@ -28,28 +28,28 @@ It's the kind of project that sits at the intersection of robotics, real-time sy
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 ### Patient-Facing
-- 🎤 **Voice Interaction** — Speak Arabic or English; Whisper STT transcribes in ~0.9 s
-- 🧠 **Agentic AI Conversation** — Claude API (online) or local Ollama / qwen2.5:7b (offline), both running the same tool-calling loop
-- 📅 **Appointment Booking** — Voice-driven booking, viewing, and cancellation
-- 🗺️ **Autonomous Navigation** — Pepper physically guides patients to their destination
-- 👤 **Face Recognition Login** — OpenCV LBPH; recognized on arrival, no typing
-- 🚨 **Emergency Triage** — Symptom-based urgency scoring with department routing
-- 💡 **Health Tips & Symptom Checker** — Context-aware, language-aware
+-  **Voice Interaction** — Speak Arabic or English; Whisper STT transcribes in ~0.9 s
+-  **Agentic AI Conversation** — Claude API (online) or local Ollama / qwen2.5:7b (offline), both running the same tool-calling loop
+-  **Appointment Booking** — Voice-driven booking, viewing, and cancellation
+-  **Autonomous Navigation** — Pepper physically guides patients to their destination
+-  **Face Recognition Login** — OpenCV LBPH; recognized on arrival, no typing
+-  **Emergency Triage** — Symptom-based urgency scoring with department routing
+-  **Health Tips & Symptom Checker** — Context-aware, language-aware
 
 ### Technical
-- 🌐 **Full bilingual UI** with proper RTL support for Arabic
-- 📚 **FAISS-indexed RAG** over the Andalusia Hospital knowledge base
-- 🎭 **Sentiment & emotion analysis** that shapes response tone
-- 🩺 **Medical NER** for extracting symptoms, drugs, and body parts from free text
-- 🔒 **Offline mode** — no internet required after model pull
-- 📷 **Live MJPEG camera stream** from Pepper to the tablet UI
+-  **Full bilingual UI** with proper RTL support for Arabic
+-  **FAISS-indexed RAG** over the Andalusia Hospital knowledge base
+-  **Sentiment & emotion analysis** that shapes response tone
+-  **Medical NER** for extracting symptoms, drugs, and body parts from free text
+-  **Offline mode** — no internet required after model pull
+-  **Live MJPEG camera stream** from Pepper to the tablet UI
 
 ---
 
-## 🏗️ System Architecture
+##  System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -112,7 +112,7 @@ Both online (Claude) and offline (Ollama) use the **same tool-calling loop** in 
 
 ---
 
-## 📁 Project Layout
+##  Project Layout
 
 ```
 Pepper-Medical-Assistance-Robot/
@@ -159,7 +159,7 @@ Pepper-Medical-Assistance-Robot/
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -216,7 +216,7 @@ python test_offline.py          # offline mode integration tests
 
 ---
 
-## ⚙️ Configuration
+##  Configuration
 
 Copy `config.example.json` → `config.json` and edit:
 
@@ -237,7 +237,7 @@ Copy `config.example.json` → `config.json` and edit:
 
 ---
 
-## 🌐 API Reference
+##  API Reference
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
@@ -260,7 +260,7 @@ Full schema in [`Documents/Technical Report.pdf`](./Documents/).
 
 ---
 
-## 🔌 Offline Mode
+##  Offline Mode
 
 `python main.py --offline` swaps the LLM provider only. Everything else — Whisper, FAISS, face recognition, the database, the tablet UI — already runs locally.
 
@@ -272,7 +272,7 @@ The **same tool-calling agentic loop** drives both online and offline modes. The
 
 ---
 
-## 🧪 Testing & Diagnostics
+##  Testing & Diagnostics
 
 | Command | What it checks |
 | --- | --- |
@@ -283,7 +283,7 @@ The **same tool-calling agentic loop** drives both online and offline modes. The
 
 ---
 
-## 👥 Team
+##  Team
 
 **Arab Academy for Science, Technology & Maritime Transport (AAST)**
 Computer Engineering Department — Graduation Project 2025/2026
@@ -291,17 +291,12 @@ Computer Engineering Department — Graduation Project 2025/2026
 | Name | Role |
 | --- | --- |
 | **Aly Lotfy** | Backend AI · Flask Server · Offline Mode · Agentic LLM Loop |
-| _Team Member_ | Navigation & Robot Control |
-| _Team Member_ | Frontend UI & Tablet Interface |
-| _Team Member_ | Face Recognition & Computer Vision |
-
-**Supervisor:** _Dr. [Name], AAST Computer Engineering_
 
 **Industry partner:** Andalusia Hospital Group — Alexandria, Egypt
 
 ---
 
-## 📄 License
+##  License
 
 This project was developed for academic purposes at AAST in partnership with Andalusia Hospital Group. All rights reserved. Patient data and trained face-recognition artifacts are intentionally gitignored.
 
