@@ -56,7 +56,9 @@ def record_audio():
 
     print("[INFO] Recording done. Transferring audio...")
 
-    cmd = '"{}" -pw nao nao@{}:{} {}'.format(
+    # -batch: never prompt interactively (a changed/unknown SSH host key would
+    # otherwise block forever on a stdin prompt and wedge the process).
+    cmd = '"{}" -batch -pw nao nao@{}:{} {}'.format(
         PSCP, PEPPER_IP, PEPPER_FILE, LOCAL_FILE
     )
     os.system(cmd)

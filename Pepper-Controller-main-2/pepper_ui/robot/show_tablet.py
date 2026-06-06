@@ -3,6 +3,7 @@
 import os
 import time
 import sys
+import json
 from naoqi import ALProxy
 
 # Python 2.7 HTTP
@@ -42,6 +43,27 @@ def wait_for_server():
             pass
         time.sleep(2)
     print("[TABLET] Flask server did not become ready within {}s.".format(SERVER_READY_TIMEOUT))
+    return False
+
+
+def wait_for_ui_heartbeat(timeout):
+    """Poll /api/tablet_status until the loaded page reports a healthy paint.
+
+    The UI pings /api/tablet_alive only after it renders VISIBLE content, so a
+    fresh heartbeat means the page truly loaded (not a white screen). Returns
+    True as soon as the server reports 'alive', else False after `timeout`s.
+    """
+    status_url = DEFAULT_URL + "/api/tablet_status"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = urllib_request.urlopen(status_url, timeout=3)
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("alive"):
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
     return False
 
 
@@ -129,14 +151,44 @@ def show_tablet_ui():
     tablet.loadUrl(cache_bust_url)
     time.sleep(8)
 
-    # 9. Force reload to handle any first-load render glitch
+    # 9. Force reload to handle any first-load render glitch. Use a FRESH
+    # cache-bust (not the bare DEFAULT_URL) — reloading the un-busted URL can
+    # re-serve a half-cached first paint and leave the tablet white.
     print("[TABLET] Reloading page...")
-    tablet.loadUrl(DEFAULT_URL)
+    tablet.loadUrl(DEFAULT_URL + "/?_t={}".format(int(time.time())))
     time.sleep(3)
 
-    print("[TABLET] UI successfully loaded.")
-    print("[TABLET] If screen is still white, Pepper may not be able to reach {}".format(DEFAULT_URL))
-    print("[TABLET] Check that Pepper's WiFi is connected to the SAME hotspot as this laptop.")
+    # 10. VERIFY the UI actually painted (not a white page). The page pings
+    # /api/tablet_alive once it renders visible content; we poll the server for
+    # that heartbeat and reload Pepper up to MAX_RELOADS times if it's missing.
+    MAX_RELOADS = 3
+    loaded = False
+    for attempt in range(1, MAX_RELOADS + 1):
+        if wait_for_ui_heartbeat(10):
+            loaded = True
+            print("[TABLET] UI confirmed loaded (heartbeat received on attempt {}).".format(attempt))
+            break
+        print("[TABLET] No UI heartbeat (attempt {}/{}). Page looks white — reloading..."
+              .format(attempt, MAX_RELOADS))
+        try:
+            tablet.resetTablet()    # clear stale WebKit cache before retry
+            time.sleep(1)
+        except Exception:
+            pass
+        try:
+            tablet.showWebview()
+        except Exception:
+            pass
+        tablet.loadUrl(DEFAULT_URL + "/?_t={}".format(int(time.time())))
+        time.sleep(5)
+
+    if loaded:
+        print("[TABLET] UI successfully loaded.")
+    else:
+        print("[TABLET] WARNING: UI never confirmed a healthy render after {} reloads."
+              .format(MAX_RELOADS))
+        print("[TABLET] Likely causes: Pepper's WiFi is not on the SAME hotspot as this")
+        print("[TABLET] laptop, or it cannot reach {}.".format(DEFAULT_URL))
 
 
 if __name__ == "__main__":

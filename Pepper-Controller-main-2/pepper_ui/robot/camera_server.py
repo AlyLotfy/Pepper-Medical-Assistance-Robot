@@ -34,6 +34,27 @@ PEPPER_IP   = os.environ.get("ROBOT_IP", "1.1.1.10")
 PEPPER_PORT = int(os.environ.get("ROBOT_PORT", "9559"))
 CAM_PORT    = int(os.environ.get("CAM_PORT", "8082"))
 
+# Camera tuning (researched against Aldebaran NAOqi 2.8 ALVideoDevice docs).
+# Resolution ids:  0=QQVGA(160x120) 1=QVGA(320x240) 2=VGA(640x480) 3=4VGA(1280x960)
+# Colorspace ids: 9=YUV422(native,fastest) 11=RGB 13=BGR
+#
+# Key trade-off for a REMOTE module over WiFi: the per-frame transfer (and thus
+# lag) scales with resolution x fps. VGA-RGB @15fps ~= 110 Mbps, which a hotspot
+# cannot sustain -> stutter. But QVGA lacks the facial detail LBPH needs for a
+# reliable match. So we DECOUPLE the two needs:
+#   * PREVIEW   : QVGA, paced fps  -> smooth, low-bandwidth positioning feed.
+#   * RECOGNITION: VGA still grabbed on-demand only when the user taps "Scan",
+#                  via setResolution() -> grab -> revert. One heavy frame, not a
+#                  heavy stream, so no streaming lag but full face detail.
+# All knobs are env-overridable so a weak/strong network can be tuned without
+# code changes.
+CAM_PREVIEW_RES  = int(os.environ.get("CAM_PREVIEW_RES", "1"))   # QVGA
+CAM_HD_RES       = int(os.environ.get("CAM_HD_RES", "2"))        # VGA for stills
+CAM_FPS          = int(os.environ.get("CAM_FPS", "15"))          # subscription fps
+CAM_TARGET_FPS   = float(os.environ.get("CAM_TARGET_FPS", "12")) # grabber pacing
+PREVIEW_QUALITY  = int(os.environ.get("CAM_PREVIEW_QUALITY", "62"))
+SNAPSHOT_QUALITY = int(os.environ.get("CAM_SNAPSHOT_QUALITY", "88"))  # crisp for LBPH
+
 # ---------- CAMERA SETUP ----------
 # Keep the proxy + subscription in mutable globals so the grabber can
 # rebuild them when NAOqi reports "module destroyed" / "Session closed".
@@ -62,11 +83,13 @@ def _connect_camera():
         # Use a unique name per attempt so stale robot-side state never
         # collides with the new subscription.
         sub_name = new_video.subscribeCamera(
-            "cam_server_{}".format(int(time.time())), 0, 1, 11, 15)
+            "cam_server_{}".format(int(time.time())),
+            0, CAM_PREVIEW_RES, 11, CAM_FPS)
         video = new_video
         SUB_NAME = sub_name
-        print("[CAMERA] Subscribed to Pepper top camera (QVGA, RGB, 15fps) "
-              "as '{}'".format(sub_name))
+        print("[CAMERA] Subscribed to Pepper top camera "
+              "(res={}, RGB, {}fps) as '{}'".format(
+                  CAM_PREVIEW_RES, CAM_FPS, sub_name))
 
 
 _connect_camera()
@@ -82,9 +105,64 @@ _cached_jpeg = None
 _cached_w = 0
 _cached_h = 0
 
+# Serializes access to getImageRemote between the streaming grabber and the
+# on-demand HD capture. They share ONE camera subscription, so two concurrent
+# getImageRemote calls — or a setResolution() landing mid-grab — corrupts a
+# frame (wrong width/height -> Image.frombytes raises). The gate guarantees the
+# grabber is paused for the ~1 frame the HD capture needs.
+_grab_gate = threading.Lock()
+
+
+def grab_highres_jpeg(max_tries=5):
+    """Grab a single VGA still for face recognition, then revert to the preview
+    resolution. Returns (jpeg_bytes, w, h) or (None, 0, 0).
+
+    Why on-demand instead of streaming VGA: a continuous VGA-RGB stream is
+    bandwidth-bound over WiFi (≈110 Mbps @15fps) and lags. A one-shot VGA grab
+    when the user taps "Scan" gives full facial detail with no streaming cost.
+    """
+    with _grab_gate:
+        with _proxy_lock:
+            v, sub = video, SUB_NAME
+        switched = False
+        try:
+            try:
+                v.setResolution(sub, CAM_HD_RES)
+                switched = True
+            except Exception as e:
+                print("[CAMERA] setResolution(HD) failed, using preview res: "
+                      + str(e))
+            # After a resolution change the buffer can still hold one frame at
+            # the OLD size; loop until we get a frame at (or above) VGA width.
+            for _ in range(max_tries):
+                img = v.getImageRemote(sub)
+                if not img:
+                    time.sleep(0.03)
+                    continue
+                w, h, raw = img[0], img[1], img[6]
+                if switched and w < 600:
+                    time.sleep(0.03)
+                    continue   # stale pre-switch frame
+                pil_img = Image.frombytes("RGB", (w, h), bytes(raw))
+                buf = BytesIO()
+                pil_img.save(buf, format="JPEG", quality=SNAPSHOT_QUALITY,
+                             optimize=False)
+                return buf.getvalue(), w, h
+            return None, 0, 0
+        except Exception as e:
+            print("[CAMERA] HD capture error: " + str(e))
+            return None, 0, 0
+        finally:
+            if switched:
+                try:
+                    v.setResolution(sub, CAM_PREVIEW_RES)
+                except Exception:
+                    pass
+
 
 def _frame_grabber():
-    """Background thread: grab a frame every ~200ms and cache it.
+    """Background thread: grab preview frames and cache them, paced to
+    CAM_TARGET_FPS.
 
     Auto-reconnects when the underlying NAOqi module is destroyed (happens
     when the robot reboots a service, or when another subscriber invalidates
@@ -92,16 +170,21 @@ def _frame_grabber():
     """
     global _cached_jpeg, _cached_w, _cached_h
     error_count = 0
+    target_interval = 1.0 / CAM_TARGET_FPS if CAM_TARGET_FPS > 0 else 0.0
     while True:
+        loop_start = time.time()
         try:
-            with _proxy_lock:
-                v, sub = video, SUB_NAME
-            img = v.getImageRemote(sub)
+            # Hold the gate so an on-demand HD capture can pause us cleanly.
+            with _grab_gate:
+                with _proxy_lock:
+                    v, sub = video, SUB_NAME
+                img = v.getImageRemote(sub)
             if img:
                 w, h, raw = img[0], img[1], img[6]
                 pil_img = Image.frombytes("RGB", (w, h), bytes(raw))
                 buf = BytesIO()
-                pil_img.save(buf, format="JPEG", quality=65, optimize=False)
+                pil_img.save(buf, format="JPEG", quality=PREVIEW_QUALITY,
+                             optimize=False)
                 jpeg = buf.getvalue()
                 with _frame_lock:
                     _cached_jpeg = jpeg
@@ -110,7 +193,15 @@ def _frame_grabber():
                     _frame_id[0] += 1
                     _frame_cond.notify_all()
                 error_count = 0
-            time.sleep(0.066)  # ~15fps grabber
+            # Adaptive pacing: sleep only the remainder of the target interval
+            # AFTER the (variable-latency) grab+encode, so we approach a steady
+            # CAM_TARGET_FPS instead of stacking a fixed sleep on top of grab
+            # time (which made effective fps unpredictable and the feed lag).
+            elapsed = time.time() - loop_start
+            remaining = target_interval - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            continue
         except Exception as e:
             error_count += 1
             msg = str(e)
@@ -144,10 +235,52 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Handle each request in a new thread so slow clients don't block."""
     daemon_threads = True
 
+    def handle_error(self, request, client_address):
+        # Default handle_error prints a full traceback to stderr. For an MJPEG
+        # camera server, the only errors that reach here are "client closed
+        # the socket while we were writing the next frame" — those are normal
+        # and not actionable. Stay silent unless TF_CAMERA_VERBOSE=1.
+        import os as _os, sys as _sys, traceback as _tb
+        if _os.environ.get("PEPPER_CAMERA_VERBOSE") == "1":
+            _sys.stderr.write("[CAMERA] error from %s\n" % (client_address,))
+            _tb.print_exc()
+
 
 class CamHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # silence per-request logs
+
+    def finish(self):
+        # Python 2.7's StreamRequestHandler.finish() calls wfile.close(),
+        # which internally flushes buffered data. If the browser already
+        # tore down the MJPEG socket (every page navigation away from a
+        # live feed does this), the flush raises ECONNRESET / errno 10054
+        # and SocketServer prints a noisy traceback. Swallow it — there
+        # is nothing useful to do at this point.
+        try:
+            if not self.wfile.closed:
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.wfile.close()
+        except Exception:
+            pass
+        try:
+            self.rfile.close()
+        except Exception:
+            pass
+
+    def handle_one_request(self):
+        # Same reason: if the client disconnects, suppress the per-request
+        # traceback from BaseHTTPRequestHandler so the console stays clean.
+        try:
+            BaseHTTPRequestHandler.handle_one_request(self)
+        except Exception:
+            self.close_connection = 1
 
     def do_GET(self):
         try:
@@ -218,10 +351,15 @@ class CamHandler(BaseHTTPRequestHandler):
         self.wfile.write(jpeg)
 
     def _serve_b64(self):
-        with _frame_lock:
-            jpeg = _cached_jpeg
-            w = _cached_w
-            h = _cached_h
+        # Recognition path: grab a full-detail VGA still on demand. Fall back
+        # to the cached preview frame if the HD grab fails (older firmware /
+        # setResolution unsupported) so face login still works, just at QVGA.
+        jpeg, w, h = grab_highres_jpeg()
+        if jpeg is None:
+            with _frame_lock:
+                jpeg = _cached_jpeg
+                w = _cached_w
+                h = _cached_h
         if jpeg is None:
             self.send_response(503)
             self.send_header("Content-Type", "application/json")

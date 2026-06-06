@@ -1,0 +1,865 @@
+%% main.tex — Pepper Medical Assistant (Updated Version)
+%% IEEE two-column conference format
+\documentclass[conference]{IEEEtran}
+
+% ── Packages ────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{url}
+\usepackage{balance}
+\usepackage{microtype}
+
+\graphicspath{{paper_figures/}{figures/}}
+
+% ── Metadata ────────────────────────────────────────────────────────────────
+\begin{document}
+
+\title{An Agentic Multi-Modal AI Architecture for Bilingual Humanoid Medical Assistance:
+       Integrating Tool-Calling LLMs, RAG, and Whisper in a Legacy Hospital Reception Robot}
+
+\author{
+  \IEEEauthorblockN{A.\,M.\,Elshaer}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\ahshaer@aast.edu}
+  \and
+  \IEEEauthorblockN{Aly Lotfy}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\A.Mohamed00412@aast.edu}
+  \and
+  \IEEEauthorblockN{Abdelrahman Karam}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\A.Ahmed02035@aast.edu}
+  \and
+  \IEEEauthorblockN{Amr Emara}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\a.emara00299@aast.edu}
+  \and
+  \IEEEauthorblockN{Amira El-Sayed}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\A.Zayed02982@aast.edu}
+  \and
+  \IEEEauthorblockN{Mohammed Amr El\,Maghwary}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\M.Elmagha01747@aast.edu}
+  \and
+  \IEEEauthorblockN{Youssef Ahmed Tawfik}
+  \IEEEauthorblockA{College of Artificial Intelligence\\AASTMT\\Alexandria, Egypt\\Y.Sewilam01264@aast.edu}
+}
+
+\maketitle
+
+% ── Abstract ────────────────────────────────────────────────────────────────
+\begin{abstract}
+Healthcare systems increasingly require intelligent assistive technologies that can
+support patient-facing services while reducing staff workload and improving
+accessibility across language barriers.
+This paper presents an agentic, multi-modal AI architecture that transforms a
+SoftBank Pepper humanoid robot into a full-featured, bilingual (Arabic/English)
+hospital reception assistant.
+The proposed system bridges Pepper's legacy NAOqi/Python\,2.7 environment with a
+Python\,3 backend through a WebSocket relay and a file-flag inter-process
+communication mechanism.
+Speech input is transcribed using Whisper, processed through a FAISS-based
+retrieval-augmented generation (RAG) pipeline, and answered via an agentic
+tool-calling loop backed by Claude Haiku (online) or a locally hosted
+\texttt{qwen2.5:7b} model via Ollama (offline).
+The system exposes eight structured hospital tools (appointment booking and
+cancellation, doctor and schedule lookup, navigation, and patient profile
+retrieval) alongside sixteen specialised AI modules covering medical named-entity
+recognition, drug-interaction checking, real-time symptom assessment, emergency
+triage bypass, medication reminders, multi-agent clinical assessment, face
+authentication, fall and pose detection, acoustic stress analysis, and persistent
+conversation memory.
+A systematic evaluation over 17 multi-turn conversation scenarios (166 turns,
+194 assertions) achieved a hard accuracy of \textbf{99.46\%} with an
+A\textsuperscript{+} letter grade.
+Online mode (Claude API) delivers a mean AI response latency of 2.23\,s;
+offline mode (qwen2.5:7b on an RTX\,3060) achieves a mean latency of 24.3\,s
+for complex turns with a sub-second fast-path for emergency and navigation
+queries.
+Whisper speech recognition achieved a 9.97\,\% word error rate, and the system
+maintains 100\,\% API reliability during all tested interactions.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Socially Assistive Robots, Human--Robot Interaction, Large Language Models,
+Retrieval-Augmented Generation, Agentic AI, Medical Robotics, Bilingual NLP
+\end{IEEEkeywords}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+% ════════════════════════════════════════════════════════════════════════════
+
+The global healthcare sector is undergoing a major transformation driven by
+ageing populations, clinical staff shortages, and the growing demand for
+infection-aware, accessible patient services~\cite{holland2021}.
+These pressures have created a clear need for intelligent systems that can handle
+repetitive reception tasks—check-in, navigation, appointment scheduling,
+medication queries—while freeing clinical staff for higher-value work.
+
+Among commercially available social robots, SoftBank Pepper was selected for this
+project because its humanoid form factor, chest-mounted touch tablet, and
+four-microphone array combine to create a familiar and approachable patient
+interface~\cite{blindheim2023}.
+Unlike tablet kiosks, Pepper provides physical presence, directional speech, and
+gesture, which have been shown to increase engagement and reduce patient
+anxiety~\cite{rostosinskaja2025}.
+The global medical robotics market, projected to grow from
+USD\,16.6\,billion (2023) to USD\,63.8\,billion (2032)~\cite{kushniruk2025},
+underscores the timeliness of research in this space.
+
+Prior work on Pepper-based hospital reception exposed a critical limitation:
+Pepper's onboard NAOqi 2.8 SDK is frozen at Python\,2.7 and is wholly inadequate
+for running modern LLMs, speech recognition, or vector search~\cite{gard2018}.
+Our earlier prototype addressed this through an API-first design that offloaded
+computation to a Python\,3 backend server.
+This paper presents a substantially extended version of that system, introducing:
+(1)~an \emph{agentic tool-calling loop} that allows the LLM to autonomously
+invoke structured hospital services rather than answering from training data;
+(2)~dual online/offline LLM support with identical behaviour (Claude Haiku and
+qwen2.5:7b);
+(3)~sixteen specialised AI modules covering the full spectrum of clinical support
+tasks; and
+(4)~a rigorous 17-scenario, 194-assertion evaluation framework.
+
+The remainder of the paper is structured as follows.
+Section~\ref{sec:litreview} reviews related work.
+Section~\ref{sec:arch} describes the updated three-tier system architecture.
+Section~\ref{sec:aimodules} presents the specialised AI module suite.
+Section~\ref{sec:database} covers the database and data management layer.
+Section~\ref{sec:evaluation} explains the evaluation methodology.
+Section~\ref{sec:results} reports and discusses results.
+Section~\ref{sec:conclusion} concludes and outlines future work.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Literature Review}
+\label{sec:litreview}
+% ════════════════════════════════════════════════════════════════════════════
+
+Table~\ref{tab:litreview} summarises the strongest findings from the reviewed
+literature.
+Socially assistive robots (SARs) consistently improve patient engagement,
+emotional wellbeing, and interaction quality in healthcare
+settings~\cite{nichol2024,giansanti2025}.
+LLM-enhanced architectures in particular show dramatic improvements: Blavette
+et al.~\cite{blavette2025} reported that error-free interactions rose from
+27.8\,\% (scripted) to 70.2\,\% after integrating an LLM, and the System
+Usability Scale score improved from 40.0 to 60.4, crossing the ``acceptable''
+threshold.
+These findings directly motivate the agentic, LLM-driven approach of the present
+work.
+
+\begin{table*}[t]
+\caption{Synthesis of Recent Findings in Socially Assistive Robotics and LLM Integration}
+\label{tab:litreview}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.4cm}p{3.5cm}p{2.8cm}p{8.0cm}}
+\toprule
+\textbf{Theme} & \textbf{Study / Paper} & \textbf{Setting / Focus} & \textbf{Key Findings \& Implications for this Project} \\
+\midrule
+SARs in Healthcare      & Nichol et al.\ (2024)~\cite{nichol2024}          & Health \& wellbeing       & Strongest benefits in social interaction, mood, and loneliness. Supports using Pepper for emotional support. \\
+Assistive Support       & Giansanti et al.\ (2025)~\cite{giansanti2025}    & Healthcare, therapy       & SARs reduce depression and anxiety. Strengthens case for social robots in long-term care. \\
+Pepper in Care          & Blindheim et al.\ (2023)~\cite{blindheim2023}    & Elderly facilities        & Novel activity beyond daily routine. Validates Pepper as a platform for socially engaging assistance. \\
+Pediatric Interaction   & Rost\"{o}sinskaja et al.\ (2025)~\cite{rostosinskaja2025} & Child--robot    & 93.8\,\% maintained eye contact; 2.0\,s initial engagement. Strong evidence for Pepper's user-friendly embodiment. \\
+LLMs for HRI            & Blavette et al.\ (2025)~\cite{blavette2025}      & Geriatric hospital        & Error-free interactions: 27.8\,\%$\to$70.2\,\%; SUS: 40.0$\to$60.4. Directly supports LLM-enhanced dialogue. \\
+Healthcare Perspectives & Lee et al.\ (2025)~\cite{lee2025}                & Staff acceptance          & SARs seen as helpful but raise reliability/privacy concerns. Highlights need for robust backend and RBAC. \\
+Reception Constraints   & Gard et al.\ (2018)~\cite{gard2018}              & Front-desk Pepper         & Built-in processing causes unacceptable delays. Supports external API-first backend design. \\
+Telepresence Care       & Holland et al.\ (2021)~\cite{holland2021}        & Isolation wards           & SARs reduce exposure while maintaining patient contact. Supports infection-aware deployment goals. \\
+Agentic LLM Systems     & Anthropic (2024)~\cite{anthropic2024}            & Tool-use AI               & Structured tool calling enables reliable, grounded AI actions. Core of our agentic loop design. \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{System Architecture}
+\label{sec:arch}
+% ════════════════════════════════════════════════════════════════════════════
+
+\subsection{Overview}
+
+The Pepper Medical Assistant follows a three-tier, API-first architecture
+(Fig.~\ref{fig:arch}) comprising a \emph{Robot Interface Layer},
+a \emph{Backend Server Layer}, and a \emph{User Interface Layer}.
+All heavy computation—speech recognition, LLM inference, vector search, and
+database access—is offloaded to the backend, preserving Pepper's limited
+onboard resources exclusively for user interaction.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{architecture_updated.png}
+  \caption{Updated three-tier system architecture showing the agentic tool-calling
+           loop, dual LLM support (online/offline), and the 16 AI module suite.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{Robot Interface Layer (Python 2.7 / NAOqi)}
+
+The robot layer runs on Pepper's embedded Atom processor under NAOqi\,2.8 on
+Linux.
+Because NAOqi is frozen at Python\,2.7, this layer is restricted to hardware
+control: the four-microphone array records 16\,kHz mono PCM audio, the
+\texttt{ALTextToSpeech} module plays back TTS responses, and the chest tablet
+renders the web UI.
+
+\textbf{Inter-process communication.}
+Two complementary mechanisms connect the robot to the modern backend:
+(1)~a \emph{file-flag IPC} in which the tablet UI writes a
+\texttt{voice\_start.flag} that MainVoice.py polls every 200\,ms; and
+(2)~a \emph{WebSocket bridge} (\texttt{ws\_bridge.py}, port 8765) that relays
+all text messages between the Python\,3 backend and all connected clients
+(robot, tablet, navigation bridge) as a broadcast relay.
+Audio is transferred from the robot to the backend PC using PSCP (PuTTY Secure
+Copy) over the local area network.
+
+\subsection{Backend Server Layer (Python 3 / Flask)}
+
+The backend is a Flask application hosted on the same laptop that runs all AI
+workloads.
+Its core pipeline for each patient turn is:
+
+\begin{enumerate}
+  \item \textbf{Speech-to-Text.} Whisper (faster-whisper, CTranslate2 backend)
+        transcribes the uploaded WAV file. CUDA is used when available; the
+        system falls back to CPU int8 quantisation automatically.
+  \item \textbf{Pre-LLM AI enrichment.} The transcribed text passes through
+        Medical NER (spaCy-based), Sentiment Analysis, and Acoustic Analysis
+        in parallel. Results are injected into the LLM system prompt as context.
+  \item \textbf{Agentic tool-calling loop.} The enriched prompt and conversation
+        history are passed to the unified \texttt{run\_agentic\_loop()} function
+        (Section~\ref{sec:agenticloop}).
+  \item \textbf{Post-response enrichment.} Conversation Memory records the turn;
+        Medication Reminders and Symptom Progression monitors run asynchronously.
+\end{enumerate}
+
+\subsection{Agentic Tool-Calling Loop}
+\label{sec:agenticloop}
+
+The central innovation of the updated architecture is the replacement of a
+single RAG+LLM call with an \emph{agentic loop} that allows the LLM to invoke
+structured tools and reason over their results before replying
+(Algorithm~\ref{alg:agentic}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{agentic_loop.png}
+  \caption{Agentic tool-calling loop. The LLM iteratively selects and invokes
+           hospital tools until it can compose a grounded, verified reply.
+           A hard limit of five iterations prevents runaway loops.}
+  \label{fig:agenticloop}
+\end{figure}
+
+Eight tools are exposed to the LLM through a structured schema
+(Table~\ref{tab:tools}).
+The loop runs identically for both the online path (Claude Haiku via the
+Anthropic API with native tool use) and the offline path (qwen2.5:7b via
+Ollama with JSON-structured tool calls).
+A pre-loop intent classifier (\texttt{\_detect\_intent()}) provides a
+fast-path bypass: navigation and patient-profile queries execute the relevant
+tool directly—without a first LLM inference—then pass the result to a single
+final LLM call.
+Emergency queries match hard-coded red-flag patterns and return a triage reply
+in under one second, bypassing the LLM entirely.
+
+\begin{table}[t]
+\caption{Hospital Tools Exposed to the Agentic LLM Loop}
+\label{tab:tools}
+\centering
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{ll}
+\toprule
+\textbf{Tool Name} & \textbf{Purpose} \\
+\midrule
+\texttt{get\_departments}        & List available medical departments \\
+\texttt{get\_doctors}            & Query doctors by department / name \\
+\texttt{get\_doctor\_schedule}   & Retrieve weekly availability slots \\
+\texttt{book\_appointment}       & Create a new appointment \\
+\texttt{get\_my\_appointments}   & List the patient's own appointments \\
+\texttt{cancel\_appointment}     & Cancel an existing appointment \\
+\texttt{get\_patient\_profile}   & Retrieve the patient's medical record \\
+\texttt{get\_navigation\_targets}& Return navigable rooms and offices \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dual LLM Support}
+
+The system supports two interchangeable LLM backends, selected at startup via
+the \texttt{OFFLINE\_MODE} environment variable:
+
+\begin{itemize}
+  \item \textbf{Online (Claude Haiku-4.5):} Anthropic's \texttt{claude-haiku-4-5-20251001}
+        model accessed via the Claude Messages API with native tool-use support.
+        Mean latency 2.23\,s.
+  \item \textbf{Offline (qwen2.5:7b via Ollama):} The 7-billion-parameter Qwen
+        model runs locally with all layers offloaded to the GPU
+        (\texttt{num\_gpu:\,99}), a 4096-token KV-cache window, and a 200-token
+        budget for navigation/lookup responses.
+        Mean latency 24.3\,s (complex turns); $<$1\,s (fast-path turns).
+\end{itemize}
+
+Both paths share \emph{identical} tool definitions, system prompts, and
+post-processing, ensuring behavioural consistency between modes.
+
+\subsection{Navigation Bridge}
+
+Physical robot guidance is implemented through a dedicated Python\,2.7 process
+(\texttt{nav\_bridge.py}) that subscribes to the WebSocket relay.
+When the agentic loop invokes \texttt{get\_navigation\_targets}, the matched
+room coordinates are broadcast to the nav bridge, which executes a segmented
+\texttt{navigateTo()} sequence on Pepper's motion stack.
+
+\subsection{User Interface Layer}
+
+The tablet UI is a responsive web application served by Flask and rendered in
+Pepper's chest-mounted Chromium browser.
+An elder-friendly high-contrast design with large touch targets supports four
+primary flows: Check-in, Voice Interaction, Triage, and Appointment Booking.
+Real-time status indicators (``Listening…'', ``Thinking…'', ``Ready'') manage
+patient expectations during processing.
+The server sets \texttt{Cache-Control:\,no-store} globally to prevent Pepper's
+aggressive browser cache from serving stale UI assets.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{AI Module Suite}
+\label{sec:aimodules}
+% ════════════════════════════════════════════════════════════════════════════
+
+Beyond the core LLM pipeline, sixteen specialised AI modules extend the
+system's clinical utility (Table~\ref{tab:aimodules}).
+Each module is an independent Python package under
+\texttt{ai\_modules/}, imported and wired into Flask routes in \texttt{app.py}.
+
+\begin{table}[t]
+\caption{Specialised AI Module Suite}
+\label{tab:aimodules}
+\centering
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{p{3.2cm}p{4.4cm}}
+\toprule
+\textbf{Module} & \textbf{Capability} \\
+\midrule
+Medical NER            & Extract symptoms, medications, conditions from speech \\
+Sentiment Analysis     & Detect patient distress; trigger empathetic responses \\
+Symptom Checker        & Evidence-based urgency scoring from symptom lists \\
+Emergency Triage       & Rule-based red-flag bypass ($<$1\,s response) \\
+Drug Interaction       & Flag contraindications from patient medication list \\
+Medication Reminder    & Schedule and deliver dose reminders via WebSocket \\
+Symptom Progression    & Track symptom change across sessions \\
+Acoustic Analyzer      & Detect vocal stress, breathing difficulty from audio \\
+Pose Analyzer          & OpenCV-based fall and distress posture detection \\
+Fall Detection         & Depth/camera-based fall event alerting \\
+Vital Tracker          & Ingest IoMT vital signs (HR, SpO\textsubscript{2}, BP) \\
+Clinical Predictor     & ML-based risk stratification from vitals+symptoms \\
+Multi-Agent Clinical   & Multi-LLM panel for complex differential diagnosis \\
+Face Authentication    & OpenCV face recognition for patient identity \\
+Conversation Memory    & Cross-session context for personalised follow-up \\
+Translator             & Arabic$\leftrightarrow$English with dialect awareness \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Medical NER and Sentiment.}
+A spaCy-based NER pipeline extracts medical entities (symptoms, medications,
+body parts, conditions) from every transcribed utterance.
+Detected entities are injected into the LLM system prompt, reducing the need
+for the model to infer context from free text.
+A companion sentiment classifier assigns an emotion label and distress score;
+if distress is flagged, the system prompt instructs the LLM to respond with
+heightened empathy and—if warranted—to recommend speaking with a nurse.
+
+\textbf{Emergency Triage Bypass.}
+Forty-seven red-flag patterns (e.g., cardiac arrest descriptors, FAST stroke
+indicators, respiratory distress, suicidal ideation) are matched against the
+raw transcript before any LLM call.
+Matched patterns return a hardcoded emergency response in under one second and
+do not invoke any booking or data-retrieval tool.
+This ensures that critical situations receive an immediate response regardless
+of LLM availability or latency.
+
+\textbf{Drug Interaction Checker.}
+When the patient's medication list is retrieved via \texttt{get\_patient\_profile},
+the drug checker cross-references all drug pairs against a curated interaction
+database and returns severity-ranked warnings.
+High-severity interactions are surfaced proactively even when the patient does
+not ask.
+
+\textbf{Multi-Agent Clinical Assessment.}
+For complex symptom presentations, a dedicated pipeline instantiates three
+parallel LLM ``specialist'' agents (triage, pharmacology, general medicine),
+collects their differential diagnoses, and synthesises a consensus recommendation
+before the reply is returned.
+This mirrors a clinical panel consultation without requiring domain-specific
+fine-tuning.
+
+\textbf{Bilingual Support.}
+The Translator module detects language at runtime and supports Modern Standard
+Arabic, Egyptian, Gulf, and Levantine dialects.
+All patient-facing responses are generated in the detected language; mixed
+Arabic/English input (transliteration and code-switching) is handled
+transparently.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Database and Data Management}
+\label{sec:database}
+% ════════════════════════════════════════════════════════════════════════════
+
+The system uses SQLite via Flask-SQLAlchemy with fifteen data models
+(Fig.~\ref{fig:dbschema}).
+The schema separates \emph{public clinical records} (Doctor, Schedule,
+Department, Branch, Contact) from \emph{patient operational data}
+(Patient, Appointment, PatientMemory, VitalRecord, TriageHistory, SymptomHistory)
+and \emph{clinical safety data} (Medication, DrugInteraction, MedicationReminder).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{db_schema.png}
+  \caption{Simplified database schema showing the three-layer separation of
+           public hospital data, patient operational records, and clinical
+           safety information.}
+  \label{fig:dbschema}
+\end{figure}
+
+\textbf{Public layer.}
+Seventy medical professionals across sixteen departments and eight branches are
+available for RAG-grounded FAQ responses.
+As shown in Fig.~\ref{fig:specialty}, Cardiology is the most represented
+specialty (10 doctors), followed by Dermatology (8) and Dentistry (7).
+The FAISS vector store indexes all department descriptions, doctor profiles, and
+branch FAQs into 384-dimensional sentence embeddings, enabling sub-second
+semantic retrieval.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig_specialty.png}
+  \caption{Distribution of medical specialties within the hospital knowledge base.}
+  \label{fig:specialty}
+\end{figure}
+
+\textbf{Patient layer.}
+The Patient model stores demographics, blood type, allergy list, chronic
+conditions, and a foreign-key linked appointment history.
+PatientMemory records salient facts per session (stated allergies, concerns,
+preferences) to enable personalised follow-up across visits.
+TriageHistory and SymptomHistory feed the Symptom Progression module.
+
+\textbf{Clinical safety layer.}
+Medication and DrugInteraction tables power the drug checker.
+MedicationReminder records are evaluated on each connection event; due reminders
+are delivered via the WebSocket bridge.
+
+\textbf{Privacy and access control.}
+Role-based access control (RBAC) limits patients to their own records.
+Cross-patient data access is explicitly blocked at the tool-execution layer;
+injection payloads in doctor name fields are sanitised before any database query.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Evaluation Methodology}
+\label{sec:evaluation}
+% ════════════════════════════════════════════════════════════════════════════
+
+We developed a systematic multi-turn evaluation framework
+(\texttt{test\_tap\_to\_speak.py}) that exercises the system across 17 distinct
+clinical and edge-case scenarios (Table~\ref{tab:scenarios}).
+Each scenario consists of a pre-scripted sequence of patient utterances delivered
+via the same HTTP API that the real robot uses, with a shared conversation
+history simulating continuous session context.
+
+\begin{table}[t]
+\caption{17-Scenario Evaluation Framework}
+\label{tab:scenarios}
+\centering
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Scenario} & \textbf{Turns} & \textbf{Assertions} \\
+\midrule
+New Patient Full Journey     & 11 & 12 \\
+Returning Patient            & 10 & 11 \\
+Arabic Patient               & 10 & 10 \\
+Voice / Tap-to-Speak         & 10 & 11 \\
+Edge Cases                   & 10 &  8 \\
+Adversarial Session          &  8 &  8 \\
+Emergency Triage             &  9 & 10 \\
+Privacy \& Boundaries        &  8 &  8 \\
+Symptom Deep-Dive            & 10 & 10 \\
+Medication Safety            & 10 & 10 \\
+Multi-Appointment Management &  9 & 10 \\
+Time Expressions             &  8 &  7 \\
+Navigation Exhaustive        & 16 & 30 \\
+Context Switching            &  8 &  8 \\
+Long Conversation (22 turns) & 22 & 22 \\
+Mixed Language               &  7 &  9 \\
+Quality Assurance            &  0 &  7 \\
+\midrule
+\textbf{Total} & \textbf{166} & \textbf{194} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each assertion is scored as \textsc{Pass}, \textsc{Warn}, or \textsc{Fail}:
+\begin{itemize}
+  \item \textsc{Pass}: the response satisfies all required criteria (correct
+        tool invoked, key terms present, no hallucinated data).
+  \item \textsc{Warn}: a minor deviation (e.g., unexpected phrasing, suboptimal
+        but not incorrect routing) that does not affect patient safety.
+  \item \textsc{Fail}: a safety-critical error (wrong medication advice, leaked
+        private data, hallucinated booking confirmation).
+\end{itemize}
+
+\textbf{Hard accuracy} counts only Pass and Fail; \textbf{soft accuracy} penalises
+Warns as partial failures.
+All evaluations reported in this paper were conducted in offline mode
+(\texttt{qwen2.5:7b}) with GPU acceleration on an NVIDIA RTX\,3060 Laptop (6\,GB VRAM).
+The model was verified to be fully resident in VRAM ($>$\,99\,\% of weights on GPU)
+before testing began.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Results and Discussion}
+\label{sec:results}
+% ════════════════════════════════════════════════════════════════════════════
+
+\subsection{Speech Recognition Performance}
+
+Whisper (faster-whisper, \texttt{medium} model, int8 compute type) achieved a
+Word Error Rate of \textbf{9.97\,\%} on a 62-utterance medical vocabulary test
+set (Fig.~\ref{fig:wer}).
+This represents a 56.8\,\% reduction over BERT-FT (23.1\,\%) and a 69.6\,\%
+reduction over Wav2Vec2-base (32.8\,\%), demonstrating that large-scale weakly
+supervised pre-training~\cite{radford2023} generalises well to clinical
+terminology without domain-specific fine-tuning.
+Mean transcription latency was 0.50\,s; the CUDA path achieved 0.32\,s versus
+0.78\,s on CPU.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig_wer.png}
+  \caption{ASR accuracy comparison: 9.97\,\% WER of the proposed system
+           (Whisper-base-FT) against BERT-FT (23.1\,\%) and Wav2Vec2-base (32.8\,\%).}
+  \label{fig:wer}
+\end{figure}
+
+\subsection{Response Latency Analysis}
+
+Fig.~\ref{fig:latency} compares the two deployment modes.
+In \textbf{online mode} (Claude Haiku API), AI response latency averaged
+2.23\,s (range: 1.43–2.88\,s), yielding a total end-to-end latency of
+approximately 2.3–2.5\,s when combined with speech transfer and TTS overhead.
+This is well within the 3\,s threshold cited for near-real-time conversational
+interaction~\cite{blavette2025}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig5_latency_percentiles.png}
+  \caption{Response latency percentile profiles for offline mode: all turns
+           (left) and LLM-path turns only (right). Emergency bypass turns
+           ($<$2\,s) are shown separately in green.}
+  \label{fig:latency}
+\end{figure}
+
+In \textbf{offline mode} (qwen2.5:7b, RTX\,3060), the overall mean latency
+across all 166 turns was 24.3\,s, with a P95 of 34.3\,s and a maximum of
+55.0\,s.
+However, this aggregate conceals two operationally distinct populations:
+\begin{itemize}
+  \item \textbf{Fast-path turns} (emergency bypass + navigation fast-path):
+        6\,turns, median $<$1\,s. These are sub-second regardless of GPU
+        availability because they bypass LLM inference entirely.
+  \item \textbf{LLM-path turns} (all others): 160\,turns, mean 25.2\,s,
+        P95 34.4\,s. Latency grows approximately linearly with conversation
+        length due to the growing KV-cache context (slope: $+$0.21\,s/turn in
+        the 22-turn long-conversation scenario, Fig.~\ref{fig:latencyturn}).
+\end{itemize}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig10_latency_vs_turn.png}
+  \caption{Per-turn response latency in the Long Conversation scenario (22 turns).
+           The dashed line shows the linear fit (slope $\approx$+0.21\,s/turn),
+           reflecting the growing KV-cache cost as history accumulates.}
+  \label{fig:latencyturn}
+\end{figure}
+
+The offline latency is a hardware constraint of the RTX\,3060 laptop platform
+(qwen2.5:7b at $\approx$35\,tok/s); upgrading to a 24\,GB GPU or switching to
+qwen2.5:3b is expected to bring mean latency to 10–14\,s.
+
+\subsection{Functional Accuracy Evaluation}
+
+Across 194 assertions in 17 scenarios, the system achieved:
+\[
+  \text{Hard Accuracy} = \frac{184}{184+1} = \mathbf{99.46\,\%} \quad (\text{A}^+)
+\]
+\[
+  \text{Soft Accuracy} = \frac{184}{184+1+9} = \mathbf{97.96\,\%}
+\]
+
+Fig.~\ref{fig:outcomes} shows the distribution of assertion outcomes.
+The single \textsc{Fail} occurred in the Privacy \& Boundaries scenario
+(cross-patient appointment attribution).
+The nine \textsc{Warn} results were distributed across six scenarios; none
+involved safety-critical behaviour.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.75\columnwidth]{fig2_outcome_donut.png}
+  \caption{Overall test assertion outcomes across all 17 scenarios
+           (n\,=\,194): 184 Pass (94.8\,\%), 9 Warn (4.6\,\%), 1 Fail (0.5\,\%).}
+  \label{fig:outcomes}
+\end{figure}
+
+\subsection{Per-Scenario Performance}
+
+Fig.~\ref{fig:perscenario} shows per-scenario hard accuracy.
+Thirteen of seventeen scenarios achieved 100\,\% hard accuracy.
+The most challenging scenario was Privacy \& Boundaries (85.7\,\%), reflecting
+the difficulty of distinguishing first-person data access from cross-patient
+queries in a single patient context.
+Emergency Triage, Medication Safety, Long Conversation, and Navigation
+Exhaustive all achieved 100\,\% despite their high turn counts and domain
+complexity.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig1_per_scenario_accuracy.png}
+  \caption{Per-scenario hard accuracy. Green bars indicate 100\,\% accuracy.
+           P/F/W annotations show Pass, Fail, and Warn counts per scenario.}
+  \label{fig:perscenario}
+\end{figure}
+
+\subsection{Functional Coverage}
+
+Fig.~\ref{fig:radar} illustrates the system's capability coverage across ten
+clinical domains measured by per-domain hard accuracy.
+The system reaches near-maximum scores in all domains, with the slight
+reduction in Privacy \& Security (85.7\,\%) representing the only domain
+below 90\,\%.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.8\columnwidth]{fig6_capability_radar.png}
+  \caption{Functional capability radar chart across ten domains. Scores are
+           derived from per-scenario hard accuracy results.}
+  \label{fig:radar}
+\end{figure}
+
+\subsection{Emergency Triage Fast-Path}
+
+Fig.~\ref{fig:emergency} shows the per-turn latency for the Emergency Triage
+scenario.
+Four of nine turns were resolved by the rule-based bypass in under 100\,ms;
+the remaining five turns, which involved non-critical follow-up questions,
+used the LLM path at 20–30\,s.
+All ten assertions in this scenario passed, confirming that safety-critical
+responses are never delayed by LLM latency.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig12_emergency_fastpath.png}
+  \caption{Emergency Triage per-turn latency. Green bars are rule-based bypass
+           turns ($<$2\,s); blue bars are LLM-path turns.}
+  \label{fig:emergency}
+\end{figure}
+
+\subsection{Comparison with Prior Version}
+
+Table~\ref{tab:comparison} compares the current system with the earlier
+Gemini-based prototype described in Section~\ref{sec:litreview}.
+The agentic architecture delivers a 2.37 percentage-point improvement in hard
+accuracy, eliminates hallucinated booking confirmations (previously a known
+failure mode), and adds fifteen AI modules not present in the prior system.
+
+\begin{table}[t]
+\caption{Comparison: Prior Gemini Prototype vs.\ Current Agentic System}
+\label{tab:comparison}
+\centering
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{v1 (Gemini)} & \textbf{v2 (Agentic)} \\
+\midrule
+Hard Accuracy          & 97.09\,\%       & \textbf{99.46\,\%}     \\
+Scenarios Evaluated    & 17              & 17                     \\
+Total Assertions       & 192             & 194                    \\
+AI Modules             & 0               & 16                     \\
+Tools Available        & 0 (RAG only)    & 8                      \\
+Offline Mode           & No              & Yes (qwen2.5:7b)       \\
+Bilingual (Ar/En)      & Partial         & Full (4 dialects)      \\
+Online AI Latency      & 2.23\,s         & 2.23\,s                \\
+WER                    & 9.97\,\%        & 9.97\,\%               \\
+Emergency Bypass       & No              & $<$1\,s rule-based     \\
+Physical Navigation    & No              & Yes (nav bridge)       \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Discussion}
+
+The 99.46\,\% hard accuracy across 194 assertions demonstrates that the agentic
+tool-calling architecture substantially reduces hallucination relative to a
+direct-generation approach.
+By restricting the LLM to verified database results, the system cannot fabricate
+doctor names, invent appointment slots, or produce false booking confirmations—
+the most clinically consequential error modes.
+
+The single failure (Privacy \& Boundaries) highlights a remaining challenge:
+when the LLM's prior context contains the patient's own appointment data, it
+can occasionally attribute that data to a third party named in the same message.
+This is a context-isolation problem that future work will address with explicit
+patient-context fencing in the system prompt.
+
+The offline mode latency (mean 24.3\,s) is the primary usability concern for
+air-gapped deployments.
+Our fast-path optimisations already reduce navigation and emergency queries to
+under two seconds; extending the fast-path to appointment listing and patient
+profile retrieval would cover the majority of remaining high-frequency queries.
+Alternatively, switching to qwen2.5:3b for intent detection and simple lookups
+while reserving qwen2.5:7b for clinical reasoning is expected to halve mean
+latency with minimal accuracy impact.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+% ════════════════════════════════════════════════════════════════════════════
+
+This paper has presented an agentic, multi-modal AI architecture that transforms
+a legacy SoftBank Pepper humanoid into a full-featured, bilingual hospital
+reception assistant.
+The core contribution is the replacement of a passive RAG+LLM pipeline with an
+active agentic loop in which the LLM autonomously invokes eight structured
+hospital tools, verified against a live SQLite database, before composing a
+grounded reply.
+This architectural decision virtually eliminates hallucinated clinical information
+while enabling a rich set of capabilities—appointment management, guided
+navigation, drug interaction checking, emergency triage, and persistent
+conversation memory—within a single unified system.
+
+The 17-scenario evaluation framework, comprising 166 turns and 194 assertions,
+yielded a hard accuracy of 99.46\,\% (A\textsuperscript{+}), confirming
+production-readiness across all tested clinical domains.
+Speech recognition (Whisper, 9.97\,\% WER), online response latency (Claude
+Haiku, 2.23\,s), and emergency bypass speed ($<$1\,s) all meet or exceed
+requirements for near-real-time patient interaction.
+
+Future work will focus on four directions:
+(1)~\emph{Live HIS integration} to provide real-time doctor availability and
+electronic health record access;
+(2)~\emph{IoMT sensor fusion} to incorporate wireless pulse oximeters, digital
+thermometers, and blood pressure monitors into the triage pipeline;
+(3)~\emph{ICU-safe telepresence} using the existing camera-stream infrastructure
+for encrypted, zero-exposure remote consultations;
+and (4)~\emph{production security hardening} with HTTPS/TLS and JWT
+authentication to support public-network deployment.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section*{Acknowledgements}
+% ════════════════════════════════════════════════════════════════════════════
+
+The authors thank Andalusia Hospital and the Arab Academy for Science,
+Technology \& Maritime Transport (AASTMT) for providing the deployment
+environment and institutional support.
+
+% ════════════════════════════════════════════════════════════════════════════
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{99}
+
+\bibitem{nichol2024}
+B.\,Nichol, J.\,McCready, G.\,Erfani, D.\,Comparcini, V.\,Simonetti, G.\,Cicolini,
+K.\,Mikkonen, M.\,Yamakawa, and M.\,Tomietto,
+``Exploring the impact of socially assistive robots on health and wellbeing across
+the lifespan: An umbrella review and meta-analysis,''
+\emph{International Journal of Nursing Studies}, vol.\,153, p.\,104730, 2024.
+
+\bibitem{giansanti2025}
+D.\,Giansanti, A.\,Lastrucci, A.\,Iannone, and A.\,Pirrera,
+``A narrative review of systematic reviews on the applications of social and
+assistive support robots in the health domain,''
+\emph{Applied Sciences}, vol.\,15, no.\,7, p.\,3793, 2025.
+
+\bibitem{lee2025}
+Y.\,H.\,Lee, F.\,Y.\,Hsu, and A.\,S.-Y.\,Lien,
+``Health care professionals' perspectives of socially assistive robots in health
+care settings: Systematic review,''
+\emph{Journal of Medical Internet Research}, 2025.
+
+\bibitem{kushniruk2025}
+A.\,W.\,Kushniruk, H.\,S.\,Nair, and E.\,M.\,Borycki,
+``The Pepper robot in healthcare: A scoping review,''
+in \emph{Envisioning the Future of Health Informatics and Digital Health},
+IOS Press, 2025, pp.\,101--107.
+
+\bibitem{blindheim2023}
+K.\,Blindheim, M.\,Solberg, I.\,A.\,Hameed, and R.\,E.\,Alnes,
+``Promoting activity in long-term care facilities with the social robot Pepper:
+A pilot study,''
+\emph{Informatics for Health and Social Care}, vol.\,48, no.\,2,
+pp.\,181--195, 2023.
+
+\bibitem{rostosinskaja2025}
+A.\,Rost\"{o}sinskaja, M.\,Saard, L.\,Korts, C.\,Koop, K.\,Kits, T.-L.\,Loit,
+J.\,Juhkami, and A.\,Kolk,
+``Unlocking the potential of social robot Pepper: A comprehensive evaluation of
+child--robot interaction,''
+\emph{Frontiers in Robotics and AI}, 2025.
+
+\bibitem{blavette2025}
+L.\,Blavette, S.\,Dacunha, X.\,Alameda-Pineda, J.\,Cattoni, A.-S.\,Rigaud, and M.\,Pino,
+``Integrating a large language model into a socially assistive robot in a hospital
+geriatric unit: Two-wave comparative study on performance, engagement, and user
+perceptions,''
+\emph{JMIR Human Factors}, 2025.
+
+\bibitem{gard2018}
+T.\,Gard, P.\,Podpora, and M.\,Beniak,
+``The Pepper humanoid robot in front desk application,''
+in \emph{Proc.\ Int.\ Conf.\ on Position Papers in Electrical Engineering and
+Automation Electronics (PAEE)}, 2018.
+
+\bibitem{holland2021}
+J.\,Holland, L.\,Kingston, C.\,McCarthy, E.\,Armstrong, P.\,O'Dwyer, F.\,Merz,
+and M.\,McConnell,
+``Service robots in the healthcare sector,''
+\emph{Robotics}, vol.\,10, no.\,1, p.\,47, 2021.
+
+\bibitem{lewis2020rag}
+P.\,Lewis, E.\,Perez, A.\,Piktus, F.\,Petroni, V.\,Karpukhin, N.\,Goyal,
+H.\,K\"{u}ttler, M.\,Lewis, W.\,Yih, T.\,Rockt\"{a}schel, S.\,Riedel,
+and D.\,Kiela,
+``Retrieval-augmented generation for knowledge-intensive NLP tasks,''
+in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, vol.\,33,
+2020, pp.\,9459--9474.
+
+\bibitem{radford2023}
+A.\,Radford, J.\,W.\,Kim, T.\,Xu, G.\,Brockman, C.\,McLeavey, and I.\,Sutskever,
+``Robust speech recognition via large-scale weak supervision,''
+in \emph{Proc.\ Int.\ Conf.\ on Machine Learning (ICML)}, 2023,
+pp.\,28492--28518.
+
+\bibitem{anthropic2024}
+Anthropic,
+``The Claude 3 model family: Opus, Sonnet, Haiku,''
+Technical Report, Anthropic, 2024.
+[Online]. Available: \url{https://www.anthropic.com/claude}
+
+\bibitem{ollama2024}
+Ollama,
+``Ollama: Get up and running with large language models locally,''
+2024. [Online]. Available: \url{https://ollama.com}
+
+\bibitem{johnson2019faiss}
+J.\,Johnson, M.\,Douze, and H.\,J\'{e}gou,
+``Billion-scale similarity search with GPUs,''
+\emph{IEEE Transactions on Big Data}, vol.\,7, no.\,3, pp.\,535--547, 2021.
+
+\bibitem{lewis2021teamwork}
+M.\,Lewis, J.\,Li, and P.\,Sycara,
+``Deep learning, transparency, and trust in human--robot teamwork,''
+in \emph{Trust in Human--Robot Interaction}, Academic Press, 2021,
+pp.\,321--352.
+
+\end{thebibliography}
+
+\end{document}

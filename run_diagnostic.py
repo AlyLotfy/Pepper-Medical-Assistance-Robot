@@ -642,7 +642,7 @@ def run_full_diagnostic(cfg, args):
         record("microphone", ok, w, d, det, dat)
 
     # ── SECTION 9: SFTP TRANSFER ────────────────────────────
-    if not args.backend_only and PARAMIKO_OK and not args.quick:
+    if not args.backend_only and PARAMIKO_OK and not args.quick and NAOQI_OK:
         section("9 / SFTP FILE TRANSFER")
         local_dest = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
@@ -655,7 +655,7 @@ def run_full_diagnostic(cfg, args):
     # ── SECTION 10: CAMERA ──────────────────────────────────
     if not args.backend_only and REQUESTS_OK:
         section("10 / CAMERA SNAPSHOT SERVER")
-        ok, w, d, det, dat = check_camera(robot_ip)
+        ok, w, d, det, dat = check_camera(server_ip)
         record("camera_server", ok, w, d, det, dat)
 
     # ── SECTION 11: FLASK BACKEND ───────────────────────────

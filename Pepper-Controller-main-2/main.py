@@ -361,7 +361,7 @@ def welcome_gesture(robot_ip, robot_port):
 
         # 4. Greeting speech
         tts.setLanguage("English")
-        tts.say("Hello! I am Pepper, your personal medical assistant at Andalusia Hospital. "
+        tts.say("Hello! I am Pepper, your personal medical assistant at the hospital. "
                 "I can help you book appointments, find doctors, guide you to rooms, "
                 "and answer your health questions. "
                 "Tap my screen or speak to me to get started!")

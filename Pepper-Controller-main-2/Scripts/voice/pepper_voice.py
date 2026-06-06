@@ -11,7 +11,7 @@ PSCP_PATH   = r"C:\Program Files\PuTTY\pscp.exe"  # full path to pscp.exe
 def greet():
     """Pepper greets the user."""
     tts = ALProxy("ALTextToSpeech", PEPPER_IP, 9559)
-    tts.say("Welcome to Andalusia Hospital, how can I help you?")
+    tts.say("Welcome to the hospital, how can I help you?")
 
 def record_from_mic():
     """Record from Pepper's mic and copy file to this computer."""
@@ -30,7 +30,8 @@ def record_from_mic():
         print("[ERROR] pscp.exe not found! Please check PSCP_PATH.")
         return None
 
-    ftp_cmd = '"{}" -pw nao nao@{}:{} {}'.format(PSCP_PATH, PEPPER_IP, pepper_path, AUDIO_FILE)
+    # -batch: never prompt interactively (avoids hanging on an SSH host-key prompt).
+    ftp_cmd = '"{}" -batch -pw nao nao@{}:{} {}'.format(PSCP_PATH, PEPPER_IP, pepper_path, AUDIO_FILE)
     print("[DEBUG] Running:", ftp_cmd)
     os.system(ftp_cmd)
 

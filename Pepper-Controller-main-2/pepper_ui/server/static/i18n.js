@@ -33,10 +33,15 @@
     "ready":              { en: "Ready",                         ar: "\u062c\u0627\u0647\u0632" },
     "connecting":         { en: "Connecting...",                 ar: "\u062c\u0627\u0631\u064a \u0627\u0644\u0627\u062a\u0635\u0627\u0644..." },
     "listening":          { en: "Listening...",                  ar: "\u0623\u0633\u062a\u0645\u0639..." },
+    "getting_ready":      { en: "One moment\u2026",               ar: "\u0644\u062d\u0638\u0629 \u0645\u0646 \u0641\u0636\u0644\u0643\u2026" },
+    "get_ready_btn":      { en: "Get Ready\u2026",                ar: "\u0627\u0633\u062a\u0639\u062f\u2026" },
+    "speak_now":          { en: "Speak now \u2014 I'm listening", ar: "\u062a\u0641\u0636\u0644 \u0628\u0627\u0644\u062d\u062f\u064a\u062b \u2014 \u0623\u0633\u062a\u0645\u0639 \u0627\u0644\u0622\u0646" },
     "thinking":           { en: "Thinking...",                   ar: "\u0623\u0641\u0643\u0631..." },
     "processing":         { en: "Processing...",                 ar: "\u062c\u0627\u0631\u064a \u0627\u0644\u0645\u0639\u0627\u0644\u062c\u0629..." },
     "voice_greeting":     { en: "Hello, I'm Pepper. Tap below to chat.", ar: "\u0645\u0631\u062d\u0628\u0627\u060c \u0623\u0646\u0627 \u0628\u064a\u0628\u0631. \u0627\u0636\u063a\u0637 \u0644\u0644\u0645\u062d\u0627\u062f\u062b\u0629." },
     "stop_recording":     { en: "Stop Recording",               ar: "\u0625\u064a\u0642\u0627\u0641 \u0627\u0644\u062a\u0633\u062c\u064a\u0644" },
+    "speaking":           { en: "Speaking...",                  ar: "\u064a\u062a\u062d\u062f\u062b..." },
+    "speaking_btn":       { en: "Pepper Speaking\u2026",        ar: "\u0628\u064a\u0628\u0631 \u064a\u062a\u062d\u062f\u062b\u2026" },
     "waiting_robot":      { en: "(Waiting for robot connection...)", ar: "(\u0641\u064a \u0627\u0646\u062a\u0638\u0627\u0631 \u0627\u062a\u0635\u0627\u0644 \u0627\u0644\u0631\u0648\u0628\u0648\u062a...)" },
     "listening_to_you":   { en: "(Listening to you...)",         ar: "(\u0623\u0633\u062a\u0645\u0639 \u0625\u0644\u064a\u0643...)" },
     "thinking_dots":      { en: "(Thinking...)",                 ar: "(\u0623\u0641\u0643\u0631...)" },
@@ -279,9 +284,17 @@
   /* ---- apply translations to DOM elements with data-i18n ---- */
   function applyI18n() {
     var lang = getLang();
-    /* set html dir and lang */
-    document.documentElement.lang = lang;
-    document.body.dir = (lang === "ar") ? "rtl" : "ltr";
+    /* Set html dir and lang ONLY when they actually change. Writing body.dir
+       forces a full bidi re-layout on Pepper's old WebKit — doing it
+       unconditionally (e.g. on every applyI18n at the same language) is a
+       needless reflow. Guarding it keeps re-applies cheap. */
+    if (document.documentElement.lang !== lang) {
+      document.documentElement.lang = lang;
+    }
+    var dir = (lang === "ar") ? "rtl" : "ltr";
+    if (document.body.dir !== dir) {
+      document.body.dir = dir;
+    }
 
     /* translate all elements with data-i18n attribute */
     var els = document.querySelectorAll("[data-i18n]");
@@ -309,7 +322,18 @@
   }
 
   /* ---- toggle language ---- */
+  /* Re-entrancy/debounce guard: switching language runs a full-page bidi
+     reflow + onLangChange re-render. On the tablet that takes long enough that
+     an impatient double-tap would queue a SECOND full switch mid-reflow,
+     stacking the work and making the UI stutter. Ignore taps that arrive
+     within the lock window \u2014 you can't meaningfully change language twice in
+     half a second anyway. */
+  var _lastToggleAt = 0;
+  var TOGGLE_LOCK_MS = 500;
   function toggleLang() {
+    var now = (Date.now ? Date.now() : new Date().getTime());
+    if (now - _lastToggleAt < TOGGLE_LOCK_MS) return;
+    _lastToggleAt = now;
     var cur = getLang();
     var next = (cur === "en") ? "ar" : "en";
     setLang(next);

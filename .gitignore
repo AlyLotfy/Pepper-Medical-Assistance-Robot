@@ -109,12 +109,15 @@ results.json
 results.txt
 results.*.json
 results.*.txt
+terminal.txt
+terminal.*.txt
 
 # --- Runtime flag files ---
 *.flag
 user.flag
 voice_start.flag
 voice_done.flag
+voice_result.json
 
 # --- macOS metadata junk ---
 __MACOSX/
@@ -126,3 +129,13 @@ __MACOSX/
 
 # --- Web scraping temp ---
 Web Scraping/
+
+# --- Paper/report binaries & artifacts (kept out of the code repo) ---
+*.pdf
+*.docx
+paper_figures/
+test_patient_scenario_report.json
+test_robot_report.json
+
+# --- Unrelated portfolio project that lives in this folder by accident ---
+github-portfolio/

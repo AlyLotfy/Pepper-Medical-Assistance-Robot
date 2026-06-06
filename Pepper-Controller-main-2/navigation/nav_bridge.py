@@ -218,7 +218,7 @@ def _startup_greeting():
             time.sleep(0.25)
 
         tts_proxy.setLanguage("English")
-        tts_proxy.say("Hello! I am Pepper, your medical assistant at Andalusia Hospital. "
+        tts_proxy.say("Hello! I am Pepper, your medical assistant at the hospital. "
                       "You can talk to me, or use the touchscreen to get started. "
                       "I am here to help!".encode("utf-8"))
 
@@ -226,7 +226,7 @@ def _startup_greeting():
         tts_proxy.setLanguage("Arabic")
         time.sleep(0.2)
         tts_proxy.say(u"\u0645\u0631\u062d\u0628\u0627\u064b! \u0623\u0646\u0627 \u0628\u064a\u0628\u0631\u060c "
-                      u"\u0645\u0633\u0627\u0639\u062f\u0643 \u0627\u0644\u0637\u0628\u064a \u0641\u064a \u0645\u0633\u062a\u0634\u0641\u0649 \u0627\u0644\u0623\u0646\u062f\u0644\u0633. "
+                      u"\u0645\u0633\u0627\u0639\u062f\u0643 \u0627\u0644\u0637\u0628\u064a \u0641\u064a \u0627\u0644\u0645\u0633\u062a\u0634\u0641\u0649. "
                       u"\u064a\u0645\u0643\u0646\u0643 \u0627\u0644\u062a\u062d\u062f\u062b \u0645\u0639\u064a \u0623\u0648 \u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0627\u0644\u0634\u0627\u0634\u0629. "
                       u"\u0623\u0646\u0627 \u0647\u0646\u0627 \u0644\u0645\u0633\u0627\u0639\u062f\u062a\u0643!".encode("utf-8"))
 
@@ -346,9 +346,18 @@ def show_navigating_screen(doctor_name, room_name):
     try:
         doc_enc  = url_quote(doctor_name.encode("utf-8") if isinstance(doctor_name, bytes) is False else doctor_name)
         room_enc = url_quote(room_name.encode("utf-8") if isinstance(room_name, bytes) is False else room_name)
-        url = "{}/static/navigating.html?doctor={}&room={}".format(
-            SERVER_URL, doc_enc, room_enc)
+        # Flask serves static files at the ROOT (static_url_path=""), so the
+        # page lives at /navigating.html — NOT /static/navigating.html. Using
+        # the /static/ prefix 404s, which flashed Flask's "Not Found" page on
+        # the tablet before navigation started. Cache-bust with a timestamp so
+        # Pepper's aggressive tablet cache always loads the live page.
+        url = "{}/navigating.html?doctor={}&room={}&_t={}".format(
+            SERVER_URL, doc_enc, room_enc, int(time.time()))
         print("[TABLET] Showing navigation screen: " + url)
+        try:
+            tablet_proxy.showWebview()   # ensure the webview is visible
+        except Exception:
+            pass
         tablet_proxy.loadUrl(url)
     except Exception as e:
         print("[TABLET] Could not show navigation screen: " + _ascii(e))
@@ -362,16 +371,46 @@ def show_navigating_screen(doctor_name, room_name):
 
 
 def restore_home_screen():
-    """Restore the default home page on the tablet."""
+    """Restore the default home page on the tablet after a navigation trip.
+
+    Two requirements, learned the hard way:
+
+      1. CACHE-BUST. Pepper's WebKit caches aggressively; loading the bare root
+         URL re-serves a stale/half-cached home page (the "old cache html" the
+         patient sees). A unique ?_t= token forces a fresh fetch every time.
+
+      2. DO NOT call resetTablet() here. resetTablet() restarts the tablet's
+         whole browser application — fine at startup, but mid-session it blanks
+         and effectively CLOSES the webview (the page 'returns then closes'
+         after a trip). index.html already carries its own blank-screen boot
+         guard, so a single clean cache-busted load is all the restore needs;
+         no forced reset/reload, nothing that can tear the webview down.
+    """
     if not tablet_proxy:
         return
+
+    def _load_home():
+        # Millisecond token so two restores in the same second still differ.
+        url = "{}/?_t={}".format(SERVER_URL, int(time.time() * 1000))
+        try:
+            tablet_proxy.showWebview()   # ensure the webview is visible
+        except Exception:
+            pass
+        tablet_proxy.loadUrl(url)
+        return url
+
     try:
-        tablet_proxy.loadUrl(SERVER_URL)
-        print("[TABLET] Restored home screen.")
+        url = _load_home()
+        print("[TABLET] Restored home screen: " + url)
     except Exception as e:
         print("[TABLET] Could not restore home screen: " + _ascii(e))
         if _is_destroyed(e):
             _reconnect_robot_proxies()
+            try:
+                if tablet_proxy:
+                    _load_home()
+            except Exception as e2:
+                print("[TABLET] Restore retry failed: " + _ascii(e2))
 
 
 # =====================================================================
@@ -813,9 +852,15 @@ def run():
                                 _uf.write(str(user_id_val) if user_id_val else "")
                         except Exception:
                             pass
+                        # Stamp the tap id (same value the tablet sent on every
+                        # path). MainVoice dedupes by this id; writing a bare "1"
+                        # here made nav_bridge's redundant write look like a NEW
+                        # tap, which fired a phantom "please speak now" turn after
+                        # the reply. Matching the id lets the dedup absorb it.
+                        tap_id_val = data.get("tap_id", "")
                         try:
                             with open(VOICE_FLAG_FILE, "w") as _f:
-                                _f.write("1")
+                                _f.write(str(tap_id_val) if tap_id_val else "1")
                             print("[VOICE] Flag file created (" + lang + ")")
                         except Exception as e:
                             print("[WARN] Could not create voice flag: " + str(e))

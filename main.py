@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 import json
+import socket
 
 # ================================
 # PATH CONFIGURATION
@@ -63,6 +64,65 @@ def load_or_create_config():
         sys.exit(1)
 
 config_data = load_or_create_config()
+
+# ================================
+# AUTO-DETECT SERVER IP
+# ================================
+def detect_server_ip(robot_ip=None):
+    """Auto-detect this laptop's LAN IP — the address Pepper's tablet must hit.
+
+    Opens a dummy UDP socket toward the robot's subnet and reads back which
+    local interface the OS would route through; that interface is the one on
+    the same network as Pepper, so its IP is the correct SERVER_IP. No packets
+    are actually sent (UDP connect only sets the route). Falls back to the
+    default-route interface, then to the hostname lookup.
+    """
+    targets = []
+    if robot_ip:
+        targets.append(robot_ip)   # prefer the NIC on Pepper's subnet
+    targets.append("8.8.8.8")      # fallback: default internet-facing NIC
+    for target in targets:
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.connect((target, 9))            # port 9 = discard; nothing sent
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                return ip
+        except Exception:
+            pass
+        finally:
+            try:
+                if s: s.close()
+            except Exception:
+                pass
+    # Last resort: resolve the hostname.
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return None
+
+_detected_ip = detect_server_ip(config_data.get("ROBOT_IP"))
+if _detected_ip:
+    _old_ip = config_data.get("SERVER_IP")
+    if _old_ip != _detected_ip:
+        print(f"[NETWORK] Auto-detected Server IP: {_detected_ip} (config had {_old_ip})")
+        config_data["SERVER_IP"] = _detected_ip
+        # Persist so the value is visible/consistent for other tools.
+        try:
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config_data, f, indent=4)
+            print("[NETWORK] Updated config.json with detected Server IP.")
+        except Exception as e:
+            print(f"[NETWORK] (could not write config.json: {e}) — using detected IP for this run.")
+    else:
+        print(f"[NETWORK] Server IP confirmed: {_detected_ip}")
+else:
+    print(f"[NETWORK] Could not auto-detect Server IP — using config value: {config_data.get('SERVER_IP')}")
 
 # ================================
 # ENVIRONMENT SETUP
@@ -194,13 +254,82 @@ if __name__ == "__main__":
         env_py3["OFFLINE_MODE"] = "1"
         env_py3["OLLAMA_MODEL"] = "qwen2.5:7b"
         print("[MODE] *** OFFLINE MODE — using local Ollama LLM (no internet needed) ***")
-        # Verify Ollama is running
+
+        # Check if Ollama is already running; if not, auto-start it with CUDA enabled.
+        import urllib.request as _ur
+        ollama_running = False
         try:
-            import urllib.request
-            urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3)
-            print("[MODE] Ollama server is running.")
+            _ur.urlopen("http://localhost:11434/api/tags", timeout=3)
+            ollama_running = True
+            print("[GPU] Ollama server already running.")
         except Exception:
-            print("[WARN] Ollama server not detected! Start it with: ollama serve")
+            pass
+
+        if not ollama_running:
+            print("[GPU] Ollama not detected — starting with CUDA GPU support ...")
+            ollama_env = os.environ.copy()
+            ollama_env["CUDA_VISIBLE_DEVICES"]    = "0"          # use first GPU
+            ollama_env["OLLAMA_GPU_OVERHEAD"]     = "512000000"  # 512 MB reserved for OS/other
+            ollama_env["OLLAMA_FLASH_ATTENTION"]  = "1"          # O(n²)→O(n log n) attention; 20-40% faster on CUDA
+            ollama_env["OLLAMA_KEEP_ALIVE"]       = "-1"         # never unload model; eliminates cold-start penalty
+            try:
+                subprocess.Popen(
+                    ["ollama", "serve"],
+                    env=ollama_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    if sys.platform == "win32" else 0,
+                )
+                # Wait up to 15s for it to come up
+                for _i in range(15):
+                    time.sleep(1)
+                    try:
+                        _ur.urlopen("http://localhost:11434/api/tags", timeout=2)
+                        print("[GPU] Ollama started successfully.")
+                        ollama_running = True
+                        break
+                    except Exception:
+                        pass
+                if not ollama_running:
+                    print("[WARN] Ollama did not start in time. Run 'ollama serve' manually.")
+            except FileNotFoundError:
+                print("[WARN] 'ollama' not found in PATH. Install from https://ollama.com")
+
+        # Verify GPU is actually being used after warmup call
+        if ollama_running:
+            import json as _json
+            try:
+                # Trigger model load with a tiny request so it appears in /api/ps
+                _ur.urlopen(
+                    _ur.Request(
+                        "http://localhost:11434/api/generate",
+                        data=_json.dumps({"model": "qwen2.5:7b", "prompt": "",
+                                          "options": {"num_gpu": 99}}).encode(),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    ),
+                    timeout=30,
+                )
+            except Exception:
+                pass
+            try:
+                with _ur.urlopen("http://localhost:11434/api/ps", timeout=5) as _r:
+                    _ps = _json.loads(_r.read())
+                for _m in _ps.get("models", []):
+                    _vram = _m.get("size_vram", 0)
+                    _total = _m.get("size", 1)
+                    _pct = int(100 * _vram / _total) if _total else 0
+                    print(f"[GPU] {_m.get('name')} — "
+                          f"{_vram // 1024 // 1024} MB on GPU "
+                          f"/ {_total // 1024 // 1024} MB total ({_pct}% GPU)")
+                    if _pct < 50:
+                        print("[WARN] Model is mostly on CPU — response times will be slow. "
+                              "Ensure CUDA drivers are installed and VRAM is sufficient.")
+                    else:
+                        print("[GPU] GPU acceleration confirmed.")
+            except Exception:
+                print("[GPU] Could not verify GPU usage via /api/ps (non-fatal).")
     else:
         print("[MODE] Online mode — using Claude API (internet required)")
 

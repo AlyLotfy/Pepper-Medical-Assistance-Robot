@@ -57,6 +57,24 @@
                   border-radius: 50px; padding: 4px 14px; font-size: 13px; margin-bottom: 14px; }
     .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
   </style>
+  <script>
+  /* INLINE boot guard — must not depend on any network fetch. */
+  (function(){
+    var K="pg_"+(location.pathname||"/");
+    function tried(){try{return sessionStorage.getItem(K)==="1";}catch(e){return false;}}
+    function mark(){try{sessionStorage.setItem(K,"1");}catch(e){}}
+    function clr(){try{sessionStorage.removeItem(K);}catch(e){}}
+    function recover(){if(tried())return false;mark();var u=location.href.split("#")[0];u+=(u.indexOf("?")>=0?"&":"?")+"_bg="+(+new Date());try{location.replace(u);}catch(e){location.href=u;}return true;}
+    window.__pepperRecover=recover;
+    window.onerror=function(m,s,l){try{var d=document.getElementById("debug-box");if(d){d.style.display="block";d.innerHTML+="ERR: "+m+" @"+l+"<br>";}}catch(e){}recover();return false;};
+    if(window.addEventListener)window.addEventListener("unhandledrejection",function(){recover();},false);
+    function blank(){var b=document.body;if(!b)return true;var k=b.children;if(!k||!k.length)return true;for(var i=0;i<k.length;i++){if(k[i].offsetHeight&&k[i].offsetHeight>0)return false;}return true;}
+    function chk(){if(blank())recover();else clr();}
+    function ready(f){if(document.readyState==="complete"||document.readyState==="interactive"){setTimeout(f,0);}else if(window.addEventListener){window.addEventListener("DOMContentLoaded",f,false);}else{var t=setInterval(function(){if(document.body){clearInterval(t);f();}},50);}}
+    ready(function(){setTimeout(chk,1500);});
+    if(document.addEventListener)document.addEventListener("click",function(e){var a=e.target;while(a&&a.nodeName!=="A")a=a.parentNode;if(!a||!a.getAttribute)return;var h=a.getAttribute("href");if(!h)return;var lo=h.toLowerCase();if(h.charAt(0)==="#"||h.charAt(0)==="/"||lo.indexOf("javascript:")===0||lo.indexOf("mailto:")===0||lo.indexOf("tel:")===0||lo.indexOf("http")===0)return;if(lo.indexOf(".html")!==-1&&h.indexOf("_t=")===-1){a.setAttribute("href",h+(h.indexOf("?")>=0?"&":"?")+"_t="+(+new Date()));}},true);
+  })();
+  </script>
 </head>
 <body>
 <div class="card">
@@ -218,7 +236,7 @@
           stepBadge.textContent = '✓ Face ID Active';
           stepBadge.style.background = '#5cb85c';
           // Return to home after 2s
-          setTimeout(function() { window.location.href = 'index.html'; }, 2000);
+          setTimeout(function() { window.location.href = '/'; }, 2000);
         } else {
           setStatus('Enrollment failed: ' + (data.error || 'Unknown error'), 'error');
         }

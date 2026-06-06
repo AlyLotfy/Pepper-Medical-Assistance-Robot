@@ -66,6 +66,24 @@
     [dir="rtl"] .message.bot  { float: right; }
     [dir="rtl"] .back-btn { left: auto; right: 20px; }
   </style>
+  <script>
+  /* INLINE boot guard — must not depend on any network fetch. */
+  (function(){
+    var K="pg_"+(location.pathname||"/");
+    function tried(){try{return sessionStorage.getItem(K)==="1";}catch(e){return false;}}
+    function mark(){try{sessionStorage.setItem(K,"1");}catch(e){}}
+    function clr(){try{sessionStorage.removeItem(K);}catch(e){}}
+    function recover(){if(tried())return false;mark();var u=location.href.split("#")[0];u+=(u.indexOf("?")>=0?"&":"?")+"_bg="+(+new Date());try{location.replace(u);}catch(e){location.href=u;}return true;}
+    window.__pepperRecover=recover;
+    window.onerror=function(m,s,l){try{var d=document.getElementById("debug-box");if(d){d.style.display="block";d.innerHTML+="ERR: "+m+" @"+l+"<br>";}}catch(e){}recover();return false;};
+    if(window.addEventListener)window.addEventListener("unhandledrejection",function(){recover();},false);
+    function blank(){var b=document.body;if(!b)return true;var k=b.children;if(!k||!k.length)return true;for(var i=0;i<k.length;i++){if(k[i].offsetHeight&&k[i].offsetHeight>0)return false;}return true;}
+    function chk(){if(blank())recover();else clr();}
+    function ready(f){if(document.readyState==="complete"||document.readyState==="interactive"){setTimeout(f,0);}else if(window.addEventListener){window.addEventListener("DOMContentLoaded",f,false);}else{var t=setInterval(function(){if(document.body){clearInterval(t);f();}},50);}}
+    ready(function(){setTimeout(chk,1500);});
+    if(document.addEventListener)document.addEventListener("click",function(e){var a=e.target;while(a&&a.nodeName!=="A")a=a.parentNode;if(!a||!a.getAttribute)return;var h=a.getAttribute("href");if(!h)return;var lo=h.toLowerCase();if(h.charAt(0)==="#"||h.charAt(0)==="/"||lo.indexOf("javascript:")===0||lo.indexOf("mailto:")===0||lo.indexOf("tel:")===0||lo.indexOf("http")===0)return;if(lo.indexOf(".html")!==-1&&h.indexOf("_t=")===-1){a.setAttribute("href",h+(h.indexOf("?")>=0?"&":"?")+"_t="+(+new Date()));}},true);
+  })();
+  </script>
 </head>
 <body>
 
@@ -93,12 +111,29 @@
   <script src="demo_store.js"></script>
   <script>
   var CHAT_KEY  = 'pepper_chat_history';
+  // Hard cap on retained conversation turns. The LLM only ever uses the last
+  // ~20 turns (the server already slices history to [-20:]), so keeping more
+  // than this on the client just bloats the payload, the sessionStorage blob,
+  // and the on-reload re-render — which is what makes a very long session
+  // (hundreds/"a million" questions) progressively lag. Capping keeps every
+  // operation O(MAX_HISTORY) no matter how long the patient keeps talking.
+  var MAX_HISTORY = 40;   // 40 entries = 20 user/bot exchanges
   var historyList = [];
   var input    = document.getElementById('user-input');
   var chatArea = document.getElementById('chat-area');
 
   /* ---------- persistence ---------- */
-  function saveSession() { try { sessionStorage.setItem(CHAT_KEY, JSON.stringify(historyList)); } catch(e){} }
+  // Keep historyList bounded. Called from every save so no code path can let
+  // the array grow without limit.
+  function trimHistory() {
+    if (historyList.length > MAX_HISTORY) {
+      historyList = historyList.slice(-MAX_HISTORY);
+    }
+  }
+  function saveSession() {
+    trimHistory();
+    try { sessionStorage.setItem(CHAT_KEY, JSON.stringify(historyList)); } catch(e){}
+  }
   function loadSession() { try { var v = sessionStorage.getItem(CHAT_KEY); return v ? JSON.parse(v) : null; } catch(e){ return null; } }
 
   function clearChat() {
@@ -119,8 +154,19 @@
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>)/s, '<ul style="margin:4px 0 4px 16px">$1</ul>')
+      .replace(/((?:<li>[\s\S]*?<\/li>)+)/, '<ul style="margin:4px 0 4px 16px">$1</ul>')
       .replace(/\n/g, '<br>');
+  }
+
+  // Cap how many bubbles/cards live in the DOM at once. Old WebKit lays out
+  // the whole scroll area on each append; an unbounded transcript means every
+  // new message gets slower to render. Pruning the oldest nodes keeps the
+  // chat snappy no matter how long the conversation runs.
+  var MAX_DOM_NODES = 120;
+  function capChatDom() {
+    while (chatArea.childNodes.length > MAX_DOM_NODES) {
+      chatArea.removeChild(chatArea.firstChild);
+    }
   }
 
   function addMsg(text, type) {
@@ -128,6 +174,7 @@
     div.className = 'message ' + type;
     div.innerHTML = markdownToHtml(text);
     chatArea.appendChild(div);
+    capChatDom();
     chatArea.scrollTop = chatArea.scrollHeight;
     return div;
   }
@@ -369,9 +416,13 @@
   (function initChat() {
     var saved = loadSession();
     if (saved && saved.length) {
-      historyList = saved;
+      // Only restore the capped tail — an old session that somehow grew huge
+      // must not re-render thousands of bubbles on load (that freezes the
+      // tablet). trimHistory keeps in-memory + storage bounded going forward.
+      historyList = saved.slice(-MAX_HISTORY);
+      saveSession();
       chatArea.innerHTML = '';
-      saved.forEach(function(m) {
+      historyList.forEach(function(m) {
         var txt = m.parts && m.parts[0] ? m.parts[0].text : '';
         if (txt) addMsg(txt, m.role === 'user' ? 'user' : 'bot');
       });

@@ -69,17 +69,49 @@
     .page-indicator { color: #b89a6c; font-weight: 600; font-size: 16px; opacity: 0.8; }
     .footer { color: #aaa; text-align: center; font-size: 13px; margin-top: 5px; flex-shrink: 0; }
 
-    /* --- VOICE OVERLAY --- */
-    #voice-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.98); z-index: 1000; display: none; -webkit-flex-direction: column; flex-direction: column; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; text-align: center; padding: 40px; }
-    #voice-overlay.active { display: -webkit-flex; display: flex; }
+    /* --- VOICE OVERLAY ---
+       Use visibility/opacity instead of display:none so the element stays in
+       the layout tree. display:none → display:flex forces a full reflow+repaint
+       every open/close; on Pepper's old WebKit this accumulates layout garbage
+       and causes jank after a few interactions.
+    */
+    #voice-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255,255,255,0.98); z-index: 1000; display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; text-align: center; padding: 40px; visibility: hidden; opacity: 0; pointer-events: none; -webkit-will-change: opacity; will-change: opacity; }
+    #voice-overlay.active { visibility: visible; opacity: 1; pointer-events: auto; }
     .voice-status { font-size: 28px; color: #b89a6c; margin-bottom: 20px; font-weight: 600; }
     .voice-text-display { font-size: 24px; color: #5a4a3b; font-weight: 500; margin-bottom: 40px; max-width: 80%; min-height: 100px; line-height: 1.4; }
     .close-voice-btn { position: absolute; top: 30px; right: 30px; background: transparent; border: 2px solid #b89a6c; color: #b89a6c; width: 50px; height: 50px; border-radius: 50%; font-size: 24px; cursor: pointer; }
-    .mic-btn { background: #b89a6c; color: white; border: none; padding: 20px 60px; font-size: 24px; border-radius: 50px; cursor: pointer; box-shadow: 0 5px 15px rgba(0,0,0,0.2); transition: background 0.3s; }
+    .mic-btn { background: #b89a6c; color: white; border: none; padding: 20px 60px; font-size: 24px; border-radius: 50px; cursor: pointer; box-shadow: 0 5px 15px rgba(0,0,0,0.2); transition: background 0.15s, -webkit-transform 0.08s, transform 0.08s; touch-action: manipulation; -ms-touch-action: manipulation; user-select: none; -webkit-user-select: none; min-width: 280px; min-height: 80px; }
+    .mic-btn:disabled { cursor: default; }
+    .mic-btn:active,
+    .mic-btn.--pressed { -webkit-transform: scale(0.94); transform: scale(0.94); box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+
+    /* Tap-receipt chip — flashes briefly each time a tap reaches the JS handler,
+       so the user knows the button received the tap even before the network
+       round-trip completes. Critical UX on Pepper's old WebKit. */
+    #tapReceipt { position: absolute; bottom: 24px; left: 50%; -webkit-transform: translateX(-50%); transform: translateX(-50%); background: #5a4a3b; color: white; padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600; opacity: 0; -webkit-transition: opacity 0.2s; transition: opacity 0.2s; pointer-events: none; }
+    #tapReceipt.--show { opacity: 0.85; }
 
     /* --- DEBUG BOX --- */
     #debug-box { position: fixed; bottom: 0; left: 0; width: 100%; background: red; color: white; padding: 5px; font-size: 10px; z-index: 9999; display: none; }
   </style>
+  <script>
+  /* INLINE boot guard — must not depend on any network fetch. */
+  (function(){
+    var K="pg_"+(location.pathname||"/");
+    function tried(){try{return sessionStorage.getItem(K)==="1";}catch(e){return false;}}
+    function mark(){try{sessionStorage.setItem(K,"1");}catch(e){}}
+    function clr(){try{sessionStorage.removeItem(K);}catch(e){}}
+    function recover(){if(tried())return false;mark();var u=location.href.split("#")[0];u+=(u.indexOf("?")>=0?"&":"?")+"_bg="+(+new Date());try{location.replace(u);}catch(e){location.href=u;}return true;}
+    window.__pepperRecover=recover;
+    window.onerror=function(m,s,l){try{var d=document.getElementById("debug-box");if(d){d.style.display="block";d.innerHTML+="ERR: "+m+" @"+l+"<br>";}}catch(e){}recover();return false;};
+    if(window.addEventListener)window.addEventListener("unhandledrejection",function(){recover();},false);
+    function blank(){var b=document.body;if(!b)return true;var k=b.children;if(!k||!k.length)return true;for(var i=0;i<k.length;i++){if(k[i].offsetHeight&&k[i].offsetHeight>0)return false;}return true;}
+    function chk(){if(blank())recover();else clr();}
+    function ready(f){if(document.readyState==="complete"||document.readyState==="interactive"){setTimeout(f,0);}else if(window.addEventListener){window.addEventListener("DOMContentLoaded",f,false);}else{var t=setInterval(function(){if(document.body){clearInterval(t);f();}},50);}}
+    ready(function(){setTimeout(chk,1500);});
+    if(document.addEventListener)document.addEventListener("click",function(e){var a=e.target;while(a&&a.nodeName!=="A")a=a.parentNode;if(!a||!a.getAttribute)return;var h=a.getAttribute("href");if(!h)return;var lo=h.toLowerCase();if(h.charAt(0)==="#"||h.charAt(0)==="/"||lo.indexOf("javascript:")===0||lo.indexOf("mailto:")===0||lo.indexOf("tel:")===0||lo.indexOf("http")===0)return;if(lo.indexOf(".html")!==-1&&h.indexOf("_t=")===-1){a.setAttribute("href",h+(h.indexOf("?")>=0?"&":"?")+"_t="+(+new Date()));}},true);
+  })();
+  </script>
 </head>
 <body>
 
@@ -89,7 +121,8 @@
     <button class="close-voice-btn" onclick="closeVoiceMode()">&#215;</button>
     <div class="voice-status" id="voiceStatus" data-i18n="initializing">Initializing...</div>
     <div class="voice-text-display" id="voiceDisplay" data-i18n="voice_greeting">Hello, I'm Pepper. Tap below to chat.</div>
-    <button class="mic-btn" id="micBtn" onclick="triggerRobotMic()" data-i18n="tap_to_speak">Tap to Speak</button>
+    <button class="mic-btn" id="micBtn" data-i18n="tap_to_speak">Tap to Speak</button>
+    <div id="tapReceipt"></div>
   </div>
 
   <div class="screen">
@@ -99,7 +132,7 @@
         <p class="subtitle" data-i18n="your_medical_guide">Your medical guide.</p>
       </div>
 
-      <button class="voice-btn" id="startVoiceBtn" data-i18n="tap_to_speak">Tap to Speak</button>
+      <button class="voice-btn" id="startVoiceBtn" onclick="openVoiceMode()" data-i18n="tap_to_speak">Tap to Speak</button>
 
       <div style="display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;">
         <div class="auth-container" id="authContainer">
@@ -140,11 +173,32 @@
   <script src="i18n.js"></script>
   <script src="demo_store.js"></script>
   <script>
-  // ERROR HANDLER
+  // ERROR HANDLER — log to the debug box AND trigger boot_guard's one-shot
+  // blank-screen recovery (boot_guard.js sets the global; this handler runs
+  // after it and would otherwise shadow boot_guard's own window.onerror).
   window.onerror = function(msg, url, line) {
      var d = document.getElementById('debug-box');
      if (d) { d.style.display = 'block'; d.innerHTML += "ERR: " + msg + " line " + line + "<br>"; }
+     if (window.__pepperRecover) { try { window.__pepperRecover(); } catch (e) {} }
   };
+
+  // TABLET HEARTBEAT — tell the server the UI actually painted, so the startup
+  // loader (show_tablet.py) can confirm a real load vs a white page and reload
+  // Pepper if needed. Only ping when VISIBLE content exists (a blank render
+  // reports nothing -> the loader reloads). ES5, fire-and-forget.
+  function _pepperHeartbeat() {
+    try {
+      var b = document.body, vis = false, k = b ? b.children : null, i;
+      if (k) { for (i = 0; i < k.length; i++) { if (k[i].offsetHeight > 0) { vis = true; break; } } }
+      if (!vis) return;
+      var x = new XMLHttpRequest();
+      x.open('GET', '/api/tablet_alive', true);
+      x.timeout = 3000;
+      x.send();
+    } catch (e) {}
+  }
+  setTimeout(_pepperHeartbeat, 1600);   // first beat after the page paints
+  setInterval(_pepperHeartbeat, 8000);  // keep-alive so the server knows it's up
 
   // --- 1. PAGINATION ---
   var currentPage = 0;
@@ -236,89 +290,583 @@
   }
 
   // --- 3. VOICE & WEBSOCKET ---
-  var ws;
-  var isRecording = false;
+  // Voice button finite-state machine:
+  //   'idle'       — ready, button shows "Tap to Speak"
+  //   'starting'   — tapped; robot is getting ready + saying "please speak now".
+  //                  The mic is NOT live yet, so we DON'T show "Listening".
+  //                  Leaves this state only when the robot confirms the mic is
+  //                  live (recording_started WS event, or status poll == recording).
+  //   'recording'  — mic is live; button shows "Stop Recording", shows "Listening"
+  //   'processing' — waiting for backend/result, button shows "Processing"
+  //   'speaking'   — Pepper is speaking the reply, button tappable for forced reset
+  // This 'starting' handshake is the core UI<->voice sync fix: the UI never
+  // claims to be listening before the robot's microphone is actually capturing.
+  var ws = null;
+  var voiceState = 'idle';
+  var voiceWatchdog = null;
+  var MAX_WAIT_MS = 30000;
+  var speakingFallbackTimer = null;
+  var startingFallbackTimer = null;   // optimistic 'starting' -> 'recording' safety net
+  var lastTapAt = 0;
+  var processingSince = 0;   // timestamp the FSM entered 'processing'
+  var TAP_DEBOUNCE_MS    = 400;
+  var MIN_RECORD_LOCK_MS = 800;
+
+  // Whether the transcript+reply for the CURRENT turn has been rendered yet.
+  // Reset at the start of every turn; set the moment EITHER the WS 'result'
+  // event OR the state poll supplies the text. This is what lets the HTTP
+  // poll act as a fallback renderer when the WS broadcast is dropped, without
+  // double-rendering when the WS message did arrive.
+  var _resultShownThisTurn = false;
+
+  // Render the transcript (what the patient said) + Pepper's reply into the
+  // voice display. Hoisted to this scope so BOTH the WS 'result' handler and
+  // the state poll can call it — the text is bound to the spoken reply.
+  function _escVoice(s) {
+    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  // Strip emoji: Pepper's tablet WebKit chokes on surrogate pairs and BMP
+  // symbol ranges. charCodeAt avoids any ES6 regex features.
+  function _stripEmojiVoice(s) {
+    if (!s) return '';
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xD800 && c <= 0xDBFF) { i++; continue; }
+      if (c >= 0x2300 && c <= 0x27BF) continue;
+      out += s.charAt(i);
+    }
+    return out;
+  }
+  function renderVoiceResult(userText, aiText) {
+    var display = document.getElementById('voiceDisplay');
+    if (!display) return;
+    display.innerHTML =
+      "<div dir='auto' style='font-size:20px;color:#999;margin-bottom:5px;'>"
+        + _escVoice(_stripEmojiVoice(userText)) + "</div>" +
+      "<div dir='auto' style='font-size:26px;color:#5a4a3b;font-weight:600;'>"
+        + _escVoice(_stripEmojiVoice(aiText)) + "</div>";
+    _resultShownThisTurn = true;
+  }
+
+  // ── State poller ──────────────────────────────────────────────────────────
+  // Single reused XHR — old WebKit accumulates GC pressure if a new XHR
+  // object is allocated every 2s (30+ objects after 3 interactions → GC pause
+  // on the 4th tap). Abort + reuse keeps the heap flat.
+  var _statePollHandle = null;
+  var _statePollIdleHits = 0;
+  var _pollXhr = null;
+
+  // The robot's voice_state.flag (idle/starting/recording/processing/speaking)
+  // is the SINGLE SOURCE OF TRUTH for what Pepper is actually doing. WS events
+  // give instant UI response; this poll guarantees the UI converges to the real
+  // robot state within ~1s even if every WS message is dropped (the ephemeral
+  // WS connections the robot opens per-event are lossy under load). That
+  // convergence is what keeps the UI in sync with the speaking — no more
+  // "Pepper Speaking" lingering after she's done, or resetting while she talks.
+  //
+  // Rank lets us apply only SAFE transitions: always follow the robot FORWARD
+  // (e.g. recording->speaking), but never jump the UI BACKWARD on a stray/stale
+  // poll (e.g. a late 'recording' reply while we're already 'speaking').
+  function _stateRank(s) {
+    return { idle:0, starting:1, recording:2, processing:3, speaking:4 }[s];
+  }
+  function _applyRobotState(robot) {
+    if (robot === 'unknown') return;
+    // 'idle' from the robot means the turn is over -> reconcile to idle, but
+    // require 2 consecutive idle reads to debounce the brief idle gap that can
+    // appear between turns and avoid killing a turn that's just starting.
+    if (robot === 'idle') {
+      _statePollIdleHits++;
+      if (_statePollIdleHits >= 2 && voiceState !== 'idle') {
+        if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+        clearVoiceWatchdog();
+        resetMicButton();
+      }
+      return;
+    }
+    _statePollIdleHits = 0;
+    // Only advance forward, never regress (protects against out-of-order polls).
+    if (voiceState !== robot && _stateRank(robot) > _stateRank(voiceState)) {
+      clearVoiceWatchdog();
+      setVoiceState(robot);
+      // Re-arm the long watchdog for the states that can legitimately last a
+      // while, so a wholly-silent robot still self-heals eventually.
+      if (robot === 'processing' || robot === 'speaking') armVoiceWatchdog();
+    }
+  }
+
+  function startStatePoller() {
+    if (_statePollHandle) return;
+    _statePollIdleHits = 0;
+    _statePollHandle = setInterval(function () {
+      if (voiceState === 'idle') { stopStatePoller(); return; }
+      // Abort previous poll if still in-flight before reusing the object.
+      try { if (_pollXhr && _pollXhr.readyState < 4) _pollXhr.abort(); } catch (e) {}
+      try {
+        _pollXhr = new XMLHttpRequest();
+        _pollXhr.open('GET', '/api/voice_status', true);
+        _pollXhr.timeout = 2500;
+        var _capturedXhr = _pollXhr;
+        _capturedXhr.onload = function () {
+          if (_capturedXhr.status < 200 || _capturedXhr.status >= 300) return;
+          var d = null;
+          try { d = JSON.parse(_capturedXhr.responseText || '{}'); } catch (e) { return; }
+          _applyRobotState(d.state);
+          // HTTP fallback for the transcript+reply text: if the WS 'result'
+          // broadcast was dropped, the poll still carries the text, so the
+          // screen shows what Pepper is saying. Only render once per turn and
+          // only once the robot is actually speaking it.
+          if (!_resultShownThisTurn && d.ai_text &&
+              (voiceState === 'speaking' || d.state === 'speaking')) {
+            renderVoiceResult(d.user_text, d.ai_text);
+          }
+        };
+        _capturedXhr.send();
+      } catch (e) {}
+    }, 1200);   // 1.2s — snappy convergence whenever a WS event is missed
+  }
+
+  function stopStatePoller() {
+    if (_statePollHandle) { clearInterval(_statePollHandle); _statePollHandle = null; }
+    try { if (_pollXhr && _pollXhr.readyState < 4) _pollXhr.abort(); } catch (e) {}
+    _pollXhr = null;
+    _statePollIdleHits = 0;
+  }
+
+  function clearVoiceWatchdog() {
+    if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
+  }
+  function armVoiceWatchdog(reasonText) {
+    clearVoiceWatchdog();
+    voiceWatchdog = setTimeout(function () {
+      var status = document.getElementById('voiceStatus');
+      if (status) status.textContent = reasonText || I18N.t('ready');
+      resetMicButton();
+    }, MAX_WAIT_MS);
+  }
+
+  // ── WebSocket — versioned reconnect ───────────────────────────────────────
+  // Each connectWebSocket() call gets a unique version number. The onclose
+  // handler only triggers a reconnect if it belongs to the CURRENT version,
+  // preventing stale sockets (already replaced by a newer call) from spawning
+  // extra connections. Without this, each closed socket fires another
+  // connectWebSocket(), multiplying open connections after a few interactions.
+  var _wsVersion = 0;
+  var _wsConnecting = false;
 
   function connectWebSocket() {
+    if (_wsConnecting) return;
+    _wsConnecting = true;
+    var myVer = ++_wsVersion;
+    var host = window.location.hostname || '127.0.0.1';
     try {
-      var host = window.location.hostname || '127.0.0.1';
-      ws = new WebSocket('ws://' + host + ':8765');
+      var sock = new WebSocket('ws://' + host + ':8765');
 
-      ws.onopen = function () {
+      sock.onopen = function () {
+        _wsConnecting = false;
+        // If a newer connection already took over, close this one cleanly.
+        if (myVer !== _wsVersion) { try { sock.close(); } catch (e) {} return; }
+        ws = sock;
         var vs = document.getElementById('voiceStatus');
-        if (vs) vs.textContent = I18N.t('ready');
+        if (vs && voiceState === 'idle') vs.textContent = I18N.t('ready');
+        try { sock.send(JSON.stringify({ type: 'hello' })); } catch (e) {}
+        // Probe backend: if a speaking_done was lost while WS was down, recover.
+        try {
+          var probe = new XMLHttpRequest();
+          probe.open('GET', '/api/voice_status', true);
+          probe.timeout = 3000;
+          probe.onload = function () {
+            if (probe.status < 200 || probe.status >= 300) return;
+            try {
+              var d = JSON.parse(probe.responseText || '{}');
+              if (d.state === 'idle' && voiceState !== 'idle' && voiceState !== 'recording') {
+                if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+                clearVoiceWatchdog();
+                resetMicButton();
+              }
+            } catch (e) {}
+          };
+          probe.send();
+        } catch (e) {}
       };
 
-      ws.onmessage = function (event) {
+      sock.onmessage = function (event) {
+        // Discard messages from a socket that has already been superseded.
+        if (ws !== sock) return;
         try {
           var msg = JSON.parse(event.data);
           if (msg.type === 'result') {
-            var display = document.getElementById('voiceDisplay');
-            // Escape HTML so a reply containing '<' or '&' renders correctly
-            function esc(s) {
-              return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-                              .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-            }
-            if (display) {
-              display.innerHTML =
-                "<div style='font-size:20px;color:#999;margin-bottom:5px;'>You: \"" + esc(msg.user_text) + "\"</div>" +
-                "<div style='font-size:26px;color:#5a4a3b;font-weight:600;'>Pepper: \"" + esc(msg.ai_text) + "\"</div>";
-            }
-            var vs2 = document.getElementById('voiceStatus');
-            if (vs2) vs2.textContent = I18N.t('speaking') || 'Speaking…';
-            resetMicButton();
+            renderVoiceResult(msg.user_text, msg.ai_text);
+            clearVoiceWatchdog();
+            setVoiceState('speaking');
+            // Flat LAST-RESORT safety only. Normal end-of-speech is driven by
+            // the robot itself: the 'speaking_done' WS event (instant) or the
+            // status poll seeing the flag return to 'idle'. We deliberately do
+            // NOT estimate speech length from character count — underestimating
+            // would reset the UI to "Tap to Speak" while Pepper is still
+            // talking (and the poller stops at idle, so it couldn't recover).
+            // 60s is longer than any capped reply can possibly take to speak.
+            if (speakingFallbackTimer) clearTimeout(speakingFallbackTimer);
+            speakingFallbackTimer = setTimeout(function () {
+              speakingFallbackTimer = null;
+              if (voiceState === 'speaking') resetMicButton();
+            }, 60000);
 
-            // Estimate how long Pepper will take to speak (~ 80ms per char,
-            // min 2.5s). After that, reset the status back to "ready".
-            var speakMs = Math.max(2500, (msg.ai_text || '').length * 80);
-            setTimeout(function () {
-              var vs3 = document.getElementById('voiceStatus');
-              if (vs3) vs3.textContent = I18N.t('ready');
-            }, speakMs);
+          } else if (msg.type === 'recording_started') {
+            // The robot's mic is NOW live (it just finished "please speak now").
+            // Flip from the 'getting ready' state to 'Listening' in lockstep
+            // with the actual robot state — the heart of the UI<->voice sync.
+            if (voiceState === 'starting') {
+              clearVoiceWatchdog();
+              setVoiceState('recording');
+              armVoiceWatchdog();
+            }
+
+          } else if (msg.type === 'speaking_start') {
+            // TTS audio is starting now. If we somehow missed 'result', at
+            // least reflect that Pepper is speaking so the UI isn't stuck.
+            if (voiceState === 'processing' || voiceState === 'starting' ||
+                voiceState === 'recording') {
+              clearVoiceWatchdog();
+              setVoiceState('speaking');
+            }
+
+          } else if (msg.type === 'speaking_done') {
+            if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+            if (voiceState === 'speaking') resetMicButton();
+
+          } else if (msg.type === 'voice_abort') {
+            clearVoiceWatchdog();
+            if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+            if (voiceState !== 'idle') {
+              var vsErr = document.getElementById('voiceStatus');
+              if (vsErr) vsErr.textContent = I18N.t('ready');
+              resetMicButton();
+            }
           }
         } catch (e) {}
       };
 
-      ws.onclose = function () { setTimeout(connectWebSocket, 3000); };
+      sock.onclose = function () {
+        _wsConnecting = false;
+        if (ws === sock) ws = null;
+        // Only reconnect if this is still the version that should be alive.
+        if (myVer === _wsVersion) { setTimeout(connectWebSocket, 500); }
+      };
+
+      sock.onerror = function () { _wsConnecting = false; };
+
+    } catch (e) {
+      _wsConnecting = false;
+      if (myVer === _wsVersion) { setTimeout(connectWebSocket, 1000); }
+    }
+  }
+
+  setInterval(function () {
+    // readyState 1 = OPEN. Avoid WebSocket.OPEN reference — some old WebKit
+    // builds don't expose it as a static on the constructor.
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {}
+    }
+  }, 10000);
+
+  function setVoiceState(newState) {
+    voiceState = newState;
+    var btn     = document.getElementById('micBtn');
+    var status  = document.getElementById('voiceStatus');
+    var display = document.getElementById('voiceDisplay');
+    if (!btn) return;
+    // Leaving 'starting' for any other state: cancel the optimistic fallback.
+    if (newState !== 'starting' && startingFallbackTimer) {
+      clearTimeout(startingFallbackTimer); startingFallbackTimer = null;
+    }
+    if (newState === 'idle') {
+      btn.textContent = I18N.t('tap_to_speak');
+      btn.style.background = '#b89a6c';
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      _resultShownThisTurn = false;
+      stopStatePoller();
+    } else if (newState === 'starting') {
+      // New turn begins — clear the previous turn's "shown" guard so this
+      // turn's text will render (via WS 'result' or the poll fallback).
+      _resultShownThisTurn = false;
+      // Robot is getting ready + saying "please speak now". Mic NOT live yet.
+      btn.textContent = I18N.t('get_ready_btn') || 'Get Ready…';
+      btn.style.background = '#c9a76f';
+      btn.disabled = false;     // tappable so the user can cancel
+      btn.style.opacity = '0.85';
+      if (status)  status.textContent  = I18N.t('getting_ready');
+      if (display) display.innerHTML   = '<i>' + I18N.t('getting_ready') + '</i>';
+      // Wait for the robot to ACTUALLY confirm the mic is live — either the
+      // 'recording_started' WS event or the state poll seeing 'recording'.
+      startStatePoller();
+      // Honest safety net: if the robot never confirms recording, do NOT fake
+      // a 'recording' state (that would tell the user "Speak now" while the
+      // mic is dead — the exact desync we're fixing). Instead reset to idle so
+      // the UI never claims a state the robot isn't in. If the robot is merely
+      // slow, the poll's forward-only reconciliation will still advance us to
+      // 'recording' the moment the robot truly starts capturing.
+      if (startingFallbackTimer) clearTimeout(startingFallbackTimer);
+      startingFallbackTimer = setTimeout(function () {
+        startingFallbackTimer = null;
+        if (voiceState === 'starting') {
+          var stStuck = document.getElementById('voiceStatus');
+          if (stStuck) stStuck.textContent = I18N.t('ready');
+          resetMicButton();
+        }
+      }, 9000);
+    } else if (newState === 'recording') {
+      btn.textContent = I18N.t('stop_recording');
+      btn.style.background = '#d9534f';
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      // Mic is confirmed live — now it's safe to tell the user to speak.
+      if (status)  status.textContent  = I18N.t('speak_now') || I18N.t('listening');
+      if (display) display.innerHTML   = '<i>' + I18N.t('listening_to_you') + '</i>';
+      // Keep the poller running: with forward-only reconciliation it can only
+      // advance recording -> processing/speaking (e.g. when the robot auto-stops
+      // at the 8s cap without a user tap), never cancel an in-progress recording.
+      startStatePoller();
+    } else if (newState === 'processing') {
+      btn.textContent = I18N.t('processing');
+      btn.style.background = '#f0ad4e';
+      // KEEP THE BUTTON TAPPABLE. A disabled button removes the user's only
+      // manual escape hatch if processing wedges (lost 'result' WS message,
+      // backend hang). triggerRobotMic() already swallows taps during the
+      // first 12s of 'processing' as no-ops — so an accidental double-tap
+      // CANNOT fire a second /api/start_voice — while a deliberate tap after
+      // 12s force-resets and restarts. Best of both: no duplicate starts,
+      // always recoverable.
+      btn.disabled = false;
+      btn.style.opacity = '0.7';
+      if (status)  status.textContent  = I18N.t('thinking');
+      if (display) display.innerHTML   = '<i>' + I18N.t('thinking_dots') + '</i>';
+      // The result for this turn hasn't arrived yet — make sure it will render
+      // (covers a poll-driven jump straight into 'processing').
+      _resultShownThisTurn = false;
+      processingSince = Date.now();
+      // Re-arm a fresh watchdog on entering processing. The watchdog armed at
+      // recording-start may have only seconds left after a long recording;
+      // a fresh MAX_WAIT_MS window guarantees the FSM self-heals even if both
+      // the WS 'result' message and the state poller are lost.
+      armVoiceWatchdog();
+      startStatePoller();
+    } else if (newState === 'speaking') {
+      btn.textContent = I18N.t('speaking_btn') || 'Pepper Speaking…';
+      btn.style.background = '#7a9fc2';
+      // KEEP THE BUTTON TAPPABLE during 'speaking'. Long Arabic replies on
+      // NAOqi can spike Pepper's CPU enough that setInterval pollers stall
+      // and WS messages get delayed — without a user-tap recovery path,
+      // the UI gets stuck on "Pepper Speaking…" indefinitely. A tap in
+      // this state force-resets to idle (triggerRobotMic handles it) so
+      // the user can always start a new turn or interrupt Pepper.
+      btn.disabled = false;
+      btn.style.opacity = '0.85';
+      if (status)  status.textContent  = I18N.t('speaking') || 'Speaking…';
+      // Passive safety net: poll backend state every 2s during 'speaking'
+      // in case the speaking_done WS message is delayed/lost.
+      startStatePoller();
+    }
+  }
+
+  // Reused XHR objects for start/stop — avoid allocating new ones every tap.
+  // Old WebKit GCs slowly; a new XHR per tap means the heap never shrinks
+  // cleanly between interactions, causing a GC pause on the Nth tap.
+  var _startXhr = null;
+  var _stopXhr  = null;
+  var _tapSeq   = 0;
+
+  // Visible chip that confirms the tap reached the JS handler. Critical UX
+  // on Pepper's old WebKit — if the network or Flask is slow, the user
+  // still gets sub-50ms feedback that their tap registered.
+  function _flashTapReceipt(label) {
+    var chip = document.getElementById('tapReceipt');
+    if (!chip) return;
+    chip.textContent = label;
+    if (chip.className.indexOf('--show') === -1) chip.className += ' --show';
+    setTimeout(function () {
+      chip.className = chip.className.replace(/\s*--show/g, '');
+    }, 500);
+  }
+
+  function _flashButtonPress(btn) {
+    if (!btn) return;
+    if (btn.className.indexOf('--pressed') === -1) btn.className += ' --pressed';
+    setTimeout(function () {
+      btn.className = btn.className.replace(/\s*--pressed/g, '');
+    }, 120);
+  }
+
+  // Send the stop signal via BOTH HTTP and WebSocket in parallel.
+  // ws_bridge.py writes the same voice_stop.flag that Flask writes, so
+  // whichever path lands at MainVoice first wins. This is what makes the
+  // button responsive when Flask's dev server is busy processing the
+  // previous /api/process_audio (which blocks new HTTP requests).
+  function _sendStop() {
+    // Fire WS immediately — non-blocking, no allocation.
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'stop_recording' })); } catch (e) {}
+    }
+    // Also fire HTTP for redundancy.
+    try { if (_stopXhr && _stopXhr.readyState < 4) _stopXhr.abort(); } catch (e) {}
+    try {
+      _stopXhr = new XMLHttpRequest();
+      _stopXhr.open('POST', '/api/stop_voice', true);
+      _stopXhr.setRequestHeader('Content-Type', 'application/json');
+      _stopXhr.timeout = 5000;
+      _stopXhr.send('{}');
+    } catch (e) {}
+  }
+
+  function _sendStart(lang, userId) {
+    // Stamp this tap with a unique id sent on BOTH paths. The robot writes the
+    // id into voice_start.flag and processes a given id only ONCE. This kills
+    // the phantom "speak now" auto-reopen: the dual WS+HTTP start writes the
+    // SAME id (one tap), so the slower second write is recognised as a
+    // duplicate and ignored instead of triggering an extra recording turn.
+    var tapId = String(Date.now()) + '-' + _tapSeq;
+    // WS first — non-blocking. ws_bridge.py will write voice_start.flag.
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({
+        type: 'start_recording', lang: lang, user_id: userId, tap_id: tapId
+      })); } catch (e) {}
+    }
+    // HTTP redundancy.
+    try { if (_startXhr && _startXhr.readyState < 4) _startXhr.abort(); } catch (e) {}
+    try {
+      _startXhr = new XMLHttpRequest();
+      _startXhr.open('POST', '/api/start_voice', true);
+      _startXhr.setRequestHeader('Content-Type', 'application/json');
+      _startXhr.timeout = 8000;
+      var _sx = _startXhr;
+      _sx.onload = function () {
+        if (_sx.status < 200 || _sx.status >= 300 && voiceState === 'recording') {
+          // Don't reset if WS succeeded — only the HTTP failed.
+          // The state poller will catch it if MainVoice never moved off idle.
+        }
+      };
+      _sx.send(JSON.stringify({ lang: lang, user_id: userId, tap_id: tapId }));
     } catch (e) {}
   }
 
   window.triggerRobotMic = function () {
-    var btn     = document.getElementById('micBtn');
-    var status  = document.getElementById('voiceStatus');
-    var display = document.getElementById('voiceDisplay');
+    var _me = (window.STORE && STORE.me) ? STORE.me() : null;
+    _tapSeq++;
+    _flashTapReceipt('Tap ' + _tapSeq);
+    _flashButtonPress(document.getElementById('micBtn'));
 
-    // If WebSocket not connected, show waiting message
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      if (status)  status.textContent = I18N.t('connecting');
-      if (display) display.innerHTML  = '<i>' + I18N.t('waiting_robot') + '</i>';
-      return;
+    var now = Date.now();
+    // De-bounce: Pepper's tablet fires touchstart + click for a single tap.
+    if (now - lastTapAt < TAP_DEBOUNCE_MS) return;
+    // Don't let the second half of a double-fire stop a recording that just started.
+    if (voiceState === 'recording' && (now - lastTapAt) < MIN_RECORD_LOCK_MS) return;
+    // Recovery: processing stuck >12s without a result — reset so the user
+    // isn't stranded, then fall through to start a fresh turn. Measured from
+    // processingSince (NOT lastTapAt) so repeated impatient taps can't keep
+    // pushing the recovery window back. Taps inside the first 12s of
+    // processing match no branch below and are harmless no-ops — that is what
+    // prevents an accidental double-tap from firing a second /api/start_voice.
+    if (voiceState === 'processing' && (now - processingSince) > 12000) {
+      clearVoiceWatchdog();
+      resetMicButton();
     }
+    // Recovery: tap during 'speaking' = user wants to start a new turn or
+    // interrupt. Pepper's TTS continues in the background — that's OK.
+    if (voiceState === 'speaking') {
+      if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+      clearVoiceWatchdog();
+      stopStatePoller();
+      setVoiceState('idle');
+    }
+    // Taps during 'starting' are ignored. 'starting' is a short transient
+    // OWNED BY THE ROBOT — it's saying "please speak now" and bringing the mic
+    // up, and will resolve to 'recording' on its own. Letting a tap cancel
+    // here is what made an impatient double-tap kill the turn and leave the
+    // user with an empty recording (and no on-screen text). To abort, the user
+    // taps the close (X) button. The 9s starting watchdog handles a hung robot.
+    if (voiceState === 'starting') return;
+    lastTapAt = now;
 
-    if (!isRecording) {
-      var _me = (window.STORE && STORE.me) ? STORE.me() : null;
-      ws.send(JSON.stringify({ type: 'start_recording', lang: I18N.getLang(), user_id: (_me && _me.id) ? _me.id : null }));
-      isRecording = true;
-      if (btn)     { btn.textContent = I18N.t('stop_recording'); btn.style.background = '#d9534f'; }
-      if (status)  status.textContent = I18N.t('listening');
-      if (display) display.innerHTML  = '<i>' + I18N.t('listening_to_you') + '</i>';
-    } else {
-      ws.send(JSON.stringify({ type: 'stop_recording' }));
-      isRecording = false;
-      if (btn)     { btn.textContent = I18N.t('processing'); btn.style.background = '#f0ad4e'; }
-      if (status)  status.textContent = I18N.t('thinking');
-      if (display) display.innerHTML  = '<i>' + I18N.t('thinking_dots') + '</i>';
+    if (voiceState === 'idle') {
+      // Enter 'starting' (NOT 'recording'): the mic isn't live until the robot
+      // confirms it. This keeps the UI in lockstep with the actual robot state.
+      setVoiceState('starting');
+      armVoiceWatchdog();
+      _sendStart(I18N.getLang(), (_me && _me.id) ? _me.id : null);
+    } else if (voiceState === 'recording') {
+      setVoiceState('processing');
+      _sendStop();
     }
   };
 
-  function resetMicButton() {
+  // Bind both touchend AND click. touchend fires immediately on lift-off
+  // — ~300ms faster than the synthetic click event on old WebKit. We mark
+  // the event as handled to suppress the trailing click that would
+  // otherwise fire and trigger triggerRobotMic a second time. The click
+  // listener remains as a fallback for tablet builds where touchend doesn't
+  // fire reliably (very rare).
+  function _bindMicButton() {
     var btn = document.getElementById('micBtn');
-    if (btn) { isRecording = false; btn.textContent = I18N.t('tap_to_speak'); btn.style.background = '#b89a6c'; }
+    if (!btn || btn._micBound) return;
+    btn._micBound = true;
+    var _lastHandled = 0;
+    function _handle(ev) {
+      var t = Date.now();
+      // If the click event arrives within 500ms of a touchend we already
+      // processed, ignore it — same physical tap.
+      if (t - _lastHandled < 500) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        return;
+      }
+      _lastHandled = t;
+      if (ev && ev.preventDefault) ev.preventDefault();
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      window.triggerRobotMic();
+    }
+    if ('ontouchend' in window || 'ontouchstart' in window) {
+      btn.addEventListener('touchend', _handle, false);
+    }
+    btn.addEventListener('click', _handle, false);
   }
+
+  function resetMicButton() {
+    if (speakingFallbackTimer) { clearTimeout(speakingFallbackTimer); speakingFallbackTimer = null; }
+    setVoiceState('idle');
+  }
+
+  window.openVoiceMode = function () {
+    var overlay = document.getElementById('voice-overlay');
+    if (!overlay) return;
+    if (overlay.className.indexOf('active') === -1) {
+      overlay.className = overlay.className + ' active';
+    }
+    var vs = document.getElementById('voiceStatus');
+    var vd = document.getElementById('voiceDisplay');
+    if (vs) vs.textContent = (ws && ws.readyState === 1) ? I18N.t('ready') : I18N.t('connecting');
+    if (vd) vd.textContent = I18N.t('voice_greeting');
+    clearVoiceWatchdog();
+    resetMicButton();
+    // Defensive rebind: if window.onload race left the button unbound,
+    // wire up touch/click handlers now so the very first tap works.
+    _bindMicButton();
+  };
 
   window.closeVoiceMode = function () {
     var overlay = document.getElementById('voice-overlay');
     if (overlay) overlay.className = overlay.className.replace(/\s*active/g, '');
+    if (voiceState === 'recording' || voiceState === 'starting') {
+      // Ask backend to stop so MainVoice doesn't process audio for an empty room.
+      try { if (_stopXhr && _stopXhr.readyState < 4) _stopXhr.abort(); } catch (e) {}
+      _stopXhr = new XMLHttpRequest();
+      _stopXhr.open('POST', '/api/stop_voice', true);
+      _stopXhr.setRequestHeader('Content-Type', 'application/json');
+      _stopXhr.timeout = 3000;
+      _stopXhr.send('{}');
+    }
+    clearVoiceWatchdog();
     resetMicButton();
   };
 
@@ -337,24 +885,38 @@
     }, 100);
 
     connectWebSocket();
+    _bindMicButton();
 
-    var btn     = document.getElementById('startVoiceBtn');
-    var overlay = document.getElementById('voice-overlay');
-    if (btn && overlay) {
-      btn.onclick = function () {
-        overlay.className = overlay.className + ' active';
-        var vs = document.getElementById('voiceStatus');
-        var vd = document.getElementById('voiceDisplay');
-        if (vs) vs.textContent = (ws && ws.readyState === WebSocket.OPEN) ? I18N.t('ready') : I18N.t('connecting');
-        if (vd) vd.textContent = I18N.t('voice_greeting');
-        resetMicButton();
-      };
-    }
+    // openVoiceMode is also bound via inline onclick on #startVoiceBtn so
+    // the button works even if window.onload races against the tablet's
+    // aggressive cache or a slow i18n.js load.
+    // The window.onload path is kept only as a redundant safeguard — the
+    // function itself is defined as window.openVoiceMode below.
 
     /* Re-render dynamic content when language is toggled */
     window.onLangChange = function () {
       checkLoginStatus();
       renderTiles();
+      // Language switch resets the per-language conversation context on
+      // the server side. Mirror that on the UI: clear any lingering
+      // "You: ... Pepper: ..." transcript so the user starts fresh.
+      // Also force-reset the FSM to idle in case it was mid-interaction —
+      // the user explicitly chose a new language, prior state is stale.
+      var vd = document.getElementById('voiceDisplay');
+      if (vd) vd.textContent = I18N.t('voice_greeting');
+      var vs = document.getElementById('voiceStatus');
+      if (vs) vs.textContent = (ws && ws.readyState === 1) ? I18N.t('ready') : I18N.t('connecting');
+      // Snap the mic FSM back to idle so a stale 'speaking' state from a
+      // pre-toggle turn doesn't block the first tap in the new language.
+      if (speakingFallbackTimer) {
+        clearTimeout(speakingFallbackTimer);
+        speakingFallbackTimer = null;
+      }
+      stopStatePoller();
+      clearVoiceWatchdog();
+      if (voiceState !== 'idle' && voiceState !== 'recording') {
+        resetMicButton();
+      }
     };
 
     /* Proactive appointment reminder via WebSocket TTS */
@@ -402,8 +964,9 @@
         var apt = appts.appointments[i];
         if (apt.date === todayStr || apt.date === tomorrowStr) {
           var reminderText = I18N.t('reminder_upcoming', apt.doctor, apt.date, apt.time);
-          /* Send reminder via WebSocket to trigger Pepper TTS */
-          if (ws && ws.readyState === WebSocket.OPEN) {
+          /* Send reminder via WebSocket to trigger Pepper TTS.
+             readyState 1 = OPEN — avoid WebSocket.OPEN, undefined on old WebKit. */
+          if (ws && ws.readyState === 1) {
             ws.send(JSON.stringify({
               type: 'tts_speak',
               text: reminderText,

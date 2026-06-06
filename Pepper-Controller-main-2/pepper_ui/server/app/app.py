@@ -6,6 +6,7 @@ import os
 import json
 import time
 import tempfile
+import traceback
 import requests
 import csv
 from faster_whisper import WhisperModel
@@ -89,6 +90,85 @@ def add_header(response):
 @app.route('/static/qimessaging.js')
 def serve_qimessaging():
     return send_from_directory(STATIC_DIR, 'qimessaging.js')
+
+# *** /static/<file> FALLBACK ***
+# Files are normally served at the root (static_url_path=""), so a request for
+# /static/navigating.html would 404. The robot tablet and some older links use
+# the /static/ prefix, so serve those from the same folder instead of flashing
+# a "Not Found" page. send_from_directory blocks path traversal automatically.
+@app.route('/static/<path:filename>')
+def serve_static_prefixed(filename):
+    return send_from_directory(STATIC_DIR, filename)
+
+# *** FRIENDLY 404 PAGE ***
+# Replaces Werkzeug's bare "Not Found" page (which the patient sees if a tile
+# links to a missing/renamed page or a stale tablet cache points at an old URL)
+# with a branded, bilingual recovery screen that always offers a way back home.
+# Note: views that explicitly `return jsonify(...), 404` are NOT routed here —
+# this only fires for unmatched URLs / abort(404) — so API error payloads are
+# unaffected. We still return JSON for /api/* and JSON-preferring clients so
+# the navigation directory fetch (guide.html XHR) keeps getting JSON.
+_FRIENDLY_404_HTML = """<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Page Not Found</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <style>
+    *,*:before,*:after{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    html,body{height:100%;margin:0;padding:0;}
+    body{
+      font-family:sans-serif;color:#5a4a3b;
+      background:-webkit-linear-gradient(315deg,#f7f4f0,#ffffff);
+      background:linear-gradient(135deg,#f7f4f0,#ffffff);
+      display:-webkit-flex;display:flex;
+      -webkit-align-items:center;align-items:center;
+      -webkit-justify-content:center;justify-content:center;
+      text-align:center;
+    }
+    .card{
+      width:90%;max-width:560px;background:#fff;border-radius:24px;
+      box-shadow:0 10px 28px rgba(5,31,60,0.10);padding:40px 30px;
+    }
+    .emoji{font-size:60px;line-height:1;margin-bottom:14px;}
+    h1{margin:0 0 8px 0;font-size:30px;font-weight:700;color:#5a4a3b;}
+    p{margin:6px 0;font-size:18px;color:#8a7b6b;line-height:1.5;}
+    .ar{font-size:19px;color:#6b5d4d;margin-top:4px;}
+    .home-btn{
+      display:inline-block;margin-top:26px;padding:16px 38px;
+      background:#b89a6c;color:#fff;border:none;border-radius:16px;
+      font-size:19px;font-weight:700;cursor:pointer;text-decoration:none;
+      box-shadow:0 4px 12px rgba(184,154,108,0.35);
+    }
+    .home-btn:active{background:#9a7d52;-webkit-transform:translateY(1px);transform:translateY(1px);}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="emoji">&#129302;</div>
+    <h1>Oops! Page Not Found</h1>
+    <p>This page isn't available. Let me take you back to the home screen.</p>
+    <p class="ar" dir="rtl">&#1593;&#1584;&#1585;&#1611;&#1575;! &#1607;&#1584;&#1607; &#1575;&#1604;&#1589;&#1601;&#1581;&#1577; &#1594;&#1610;&#1585; &#1605;&#1608;&#1580;&#1608;&#1583;&#1577;. &#1583;&#1593;&#1606;&#1610; &#1571;&#1593;&#1610;&#1583;&#1603; &#1573;&#1604;&#1609; &#1575;&#1604;&#1588;&#1575;&#1588;&#1577; &#1575;&#1604;&#1585;&#1574;&#1610;&#1587;&#1610;&#1577;.</p>
+    <a class="home-btn" href="/">&#8592; Back to Home &middot; <span dir="rtl">&#1575;&#1604;&#1585;&#1574;&#1610;&#1587;&#1610;&#1577;</span></a>
+  </div>
+  <script>
+    /* Auto-return to the home screen after 8s so the tablet never gets
+       stranded if nobody taps the button. */
+    setTimeout(function(){ window.location.href = "/"; }, 8000);
+  </script>
+</body>
+</html>"""
+
+@app.errorhandler(404)
+def friendly_not_found(e):
+    # API / JSON clients keep getting a JSON 404 (don't break XHR consumers).
+    wants_json = (
+        request.path.startswith("/api/")
+        or "application/json" in (request.headers.get("Accept") or "")
+    )
+    if wants_json:
+        return jsonify({"error": "Not found", "path": request.path}), 404
+    return _FRIENDLY_404_HTML, 404
 
 # *** SECURITY KEY (Required for Session) ***
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "pepper_medical_secret_key_99")
@@ -1431,8 +1511,14 @@ OFFLINE_MODE    = os.environ.get("OFFLINE_MODE", "0") == "1"
 # cookies, so session['voice_history'] is always empty for voice calls.
 # We keep history in a module-level dict keyed by patient_id so it persists
 # across requests for the same patient within a server lifetime.
-_voice_conv_store: dict = {}   # {patient_id_or_'guest': [history_turns]}
-_VOICE_HISTORY_MAX = 10        # keep last 10 turns (5 exchanges)
+_voice_conv_store: dict = {}   # {(patient_id_or_'guest'):lang -> [history_turns]}
+_VOICE_HISTORY_MAX = 10        # keep last 10 turns (5 exchanges) per key
+# Cap the number of distinct (user, lang) conversation keys retained. Without
+# this, the dict grows by one or two entries per patient for the entire server
+# lifetime — on a robot left running for weeks across many patients that is an
+# unbounded memory leak that eventually causes GC pauses / lag. We keep it
+# bounded with simple LRU eviction (oldest-inserted key dropped first).
+_VOICE_CONV_MAX_KEYS = 200
 OLLAMA_URL      = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
@@ -1474,7 +1560,7 @@ def call_claude(system_prompt, messages, max_tokens=256):
     return resp_json["content"][0]["text"]
 
 
-def call_ollama(system_prompt, messages, max_tokens=256, tools=None):
+def call_ollama(system_prompt, messages, max_tokens=256, tools=None, num_ctx=4096):
     """Low-level Ollama API call with native tool calling support."""
     ollama_messages = [{"role": "system", "content": system_prompt}]
     for m in messages:
@@ -1498,6 +1584,9 @@ def call_ollama(system_prompt, messages, max_tokens=256, tools=None):
             "num_predict": max_tokens,
             "temperature": 0.3,
             "top_p": 0.9,
+            "num_gpu": 99,      # offload all layers to GPU; Ollama caps at actual layer count
+            "num_thread": 4,    # CPU threads for the layers that don't fit (usually none)
+            "num_ctx": num_ctx,  # KV-cache window; smaller = faster prefill for short turns
         }
     }
     if tools:
@@ -1655,10 +1744,28 @@ def api_emotion_detect():
 # *** API ROUTES ***
 # ===============================
 @app.route("/")
-def root(): 
+def root():
     response = make_response(app.send_static_file("index.html"))
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     return response
+
+# --- TABLET LIVENESS HEARTBEAT ---
+# The loaded UI pings /api/tablet_alive once it has rendered VISIBLE content.
+# The startup tablet loader (show_tablet.py) polls /api/tablet_status to confirm
+# the page actually painted (vs a white screen) and reloads Pepper if it didn't.
+_tablet_last_seen = [0.0]
+
+@app.route("/api/tablet_alive", methods=["GET", "POST"])
+def api_tablet_alive():
+    _tablet_last_seen[0] = time.time()
+    return jsonify({"ok": True})
+
+@app.route("/api/tablet_status", methods=["GET"])
+def api_tablet_status():
+    age = time.time() - _tablet_last_seen[0]
+    # 'alive' = the tablet reported a healthy render within the last 12s.
+    return jsonify({"alive": (_tablet_last_seen[0] > 0 and age < 12.0),
+                    "age": round(age, 1)})
 # --- MISSING ROUTE: MY APPOINTMENTS ---
 @app.route("/api/my_appointments", methods=["GET"])
 def api_my_appointments():
@@ -1840,6 +1947,112 @@ def api_ai_health_tips():
         ]
         return jsonify({"success": True, "tips": fallback_tips, "patient_name": patient.name})
 
+# --- Voice trigger: tablet taps this HTTP endpoint to drop the flag file ---
+# Using HTTP instead of WebSocket avoids connection-state timing issues on Pepper's old browser.
+@app.route("/api/start_voice", methods=["POST"])
+def start_voice():
+    data    = request.get_json(silent=True) or {}
+    lang    = data.get("lang", "en")
+    user_id = str(data.get("user_id", "") or "")
+    tap_id  = str(data.get("tap_id", "") or "")
+
+    voice_dir = os.path.realpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "..", "pepper_voice")
+    )
+
+    try:
+        with open(os.path.join(voice_dir, "lang.flag"), "w") as f:
+            f.write(lang)
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(voice_dir, "user.flag"), "w") as f:
+            f.write(user_id)
+    except Exception:
+        pass
+    # A new start_voice supersedes any pending stop request from a prior turn.
+    try:
+        _stop = os.path.join(voice_dir, "voice_stop.flag")
+        if os.path.exists(_stop):
+            os.remove(_stop)
+    except Exception:
+        pass
+    # Pre-emptively mark state as 'starting' (NOT 'recording') so the tablet's
+    # status poll doesn't see a stale 'idle' from the previous turn, while also
+    # not claiming the mic is live yet — MainVoice.py flips it to 'recording'
+    # only once startMicrophonesRecording has actually run. This is what keeps
+    # the tablet UI in lockstep with the robot instead of jumping ahead.
+    try:
+        with open(os.path.join(voice_dir, "voice_state.flag"), "w") as f:
+            f.write("starting")
+    except Exception:
+        pass
+    try:
+        with open(os.path.join(voice_dir, "voice_start.flag"), "w") as f:
+            # Write the tap id so MainVoice ignores the duplicate write from the
+            # parallel WebSocket start path (same tap → no phantom extra turn).
+            f.write(tap_id or "1")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# --- Voice state poll: tablet calls this every couple of seconds while it
+# thinks the mic is busy, so it can recover if the WS 'result' broadcast
+# was missed. Returns whatever MainVoice.py wrote to voice_state.flag. ---
+@app.route("/api/voice_status", methods=["GET"])
+def voice_status():
+    voice_dir = os.path.realpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "..", "pepper_voice")
+    )
+    state_path = os.path.join(voice_dir, "voice_state.flag")
+    state = "unknown"
+    try:
+        if os.path.exists(state_path):
+            with open(state_path, "r") as _sf:
+                raw = _sf.read().strip()
+                if raw in ("idle", "starting", "recording", "processing", "speaking"):
+                    state = raw
+    except Exception:
+        pass
+    # Also hand back the last transcript + reply so the tablet can render the
+    # text even when the WS 'result' broadcast was dropped. This keeps the
+    # on-screen text in lockstep with what Pepper is speaking — one never
+    # happens without the other. MainVoice clears this file at the start of
+    # each turn, so it can only carry the CURRENT turn's text.
+    user_text, ai_text, result_ts = "", "", 0
+    try:
+        result_path = os.path.join(voice_dir, "voice_result.json")
+        if os.path.exists(result_path):
+            with open(result_path, "r") as _rf:
+                res = json.load(_rf) or {}
+            user_text = res.get("user_text", "") or ""
+            ai_text   = res.get("ai_text", "") or ""
+            result_ts = res.get("ts", 0) or 0
+    except Exception:
+        pass
+    return jsonify({"state": state, "user_text": user_text,
+                    "ai_text": ai_text, "result_ts": result_ts})
+
+
+# --- Voice early-stop trigger: tablet taps this to end the current recording. ---
+@app.route("/api/stop_voice", methods=["POST"])
+def stop_voice():
+    """Drop a 'voice_stop.flag' file; MainVoice.py polls for it during
+    recording and stops as soon as it appears (after a 1s minimum)."""
+    voice_dir = os.path.realpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "..", "pepper_voice")
+    )
+    try:
+        with open(os.path.join(voice_dir, "voice_stop.flag"), "w") as f:
+            f.write("1")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 # --- 2. VOICE ENDPOINT (full tool use, same as chatbot) ---
 @app.route("/api/process_audio", methods=["POST"])
 def process_audio():
@@ -1882,14 +2095,21 @@ def process_audio():
             transcribe_opts["beam_size"] = 8
             transcribe_opts["best_of"] = 5
             transcribe_opts["no_speech_threshold"] = 0.35
+            # IMPORTANT: do NOT include a full example sentence with a specific
+            # symptom ("عندي وجع في بطني من إمبارح") in the initial prompt —
+            # Whisper uses initial_prompt as a strong style anchor, and a
+            # specific example causes the decoder to bias every utterance
+            # toward that template ("الباطنة" → "بطني", routing everything to
+            # stomach pain). Keep the prompt vocabulary-only: a flat word list
+            # primes the dialect without contaminating content.
             transcribe_opts["initial_prompt"] = (
-                "محادثة باللهجة المصرية العامية مع روبوت استقبال في مستشفى أندلسية. "
-                "المريض بيتكلم مصري عادي: عايز، عاوز، محتاج، ممكن، لو سمحت، إزيك، إزاي، "
-                "فين، امتى، ليه، بكرة، النهارده، إمبارح، دلوقتي، أهو، كده، يعني، عشان، "
-                "الدكتور، دكتورة، ميعاد، حجز موعد، كشف، عيادة، صيدلية، دوا، علاج، "
-                "وجع، ألم، صداع، حرارة، سخونية، برد، كحة، ضغط، سكر، قلب، بطن، ضهر. "
-                "مثال: عايز أحجز ميعاد مع الدكتور إسلام بكرة. فين عيادة الأسنان؟ "
-                "عندي وجع في بطني من إمبارح."
+                "محادثة باللهجة المصرية مع روبوت استقبال في مستشفى أندلسية. "
+                "كلمات شائعة: عايز، عاوز، محتاج، ممكن، لو سمحت، إزيك، إزاي، "
+                "فين، امتى، ليه، بكرة، النهارده، إمبارح، دلوقتي، يعني، عشان، "
+                "الدكتور، دكتورة، ميعاد، حجز، كشف، عيادة، صيدلية، دوا، علاج، "
+                "الباطنة، الجراحة، الأطفال، النساء، التوليد، الجلدية، الأسنان، "
+                "العيون، الأنف، الأذن، القلب، العظام، الأعصاب، الكلى، الصدر، "
+                "وجع، ألم، صداع، حرارة، سخونية، برد، كحة، ضغط، سكر."
             )
         elif ui_lang == "en":
             transcribe_opts["language"] = "en"
@@ -1920,8 +2140,66 @@ def process_audio():
 
         user_text = " ".join(seg.text for seg in segments).strip()
         detected_lang = info.language if info else "en"
-        lang = ui_lang if ui_lang in ("ar", "en") else ("ar" if detected_lang == "ar" else "en")
+
+        # Whisper fallback: if the forced-language transcription is empty
+        # (which happens when the user has toggled language but spoken in
+        # the other language — Arabic prompt + English speech yields silence,
+        # and vice versa), retry without forcing the language. This costs
+        # an extra ~1-2s but rescues the turn instead of returning "I did
+        # not hear anything." when the user actually spoke.
+        if not user_text and ui_lang in ("ar", "en"):
+            print("[VOICE] Forced-lang ({}) transcription empty — "
+                  "retrying with auto-detect".format(ui_lang))
+            try:
+                fallback_opts = dict(transcribe_opts)
+                fallback_opts.pop("language", None)
+                fallback_opts.pop("initial_prompt", None)
+                fallback_opts.pop("task", None)
+                segs2, info2 = audio_model.transcribe(temp_filename, **fallback_opts)
+                segs2_list = list(segs2)
+                user_text_fb = " ".join(seg.text for seg in segs2_list).strip()
+                if user_text_fb:
+                    user_text = user_text_fb
+                    detected_lang = info2.language if info2 else detected_lang
+                    print("[VOICE] Auto-detect rescued: lang={} text={!r}".format(
+                        detected_lang, user_text[:80]))
+            except Exception as _e:
+                print("[VOICE] Auto-detect fallback failed: {}".format(_e))
+
+        # Trust the actual detected language when it strongly disagrees with
+        # the UI toggle — the patient's spoken language is the ground truth.
+        # This makes the pipeline robust to the user forgetting to toggle.
+        if detected_lang in ("ar", "en") and detected_lang != ui_lang:
+            print("[VOICE] UI lang={} but Whisper detected {} — using detected".format(
+                ui_lang, detected_lang))
+            lang = detected_lang
+        else:
+            lang = ui_lang if ui_lang in ("ar", "en") else ("ar" if detected_lang == "ar" else "en")
         print(f"[VOICE] User said ({lang}): {user_text}")
+
+        # Short-circuit empty transcription BEFORE calling the LLM. Claude
+        # rejects empty user messages with "user messages must have
+        # non-empty content" — we don't need to round-trip to find that out.
+        if not user_text:
+            polite = (u"لم أسمعك جيداً. هل يمكنك إعادة ما قلته؟"
+                      if lang == "ar"
+                      else "I did not hear anything. Please try again.")
+            print("[VOICE] Empty transcription — returning polite retry message without LLM call.")
+            return jsonify({
+                "text":  "",
+                "reply": polite,
+                "lang":  lang,
+                "acoustic_analysis": {
+                    "status": "error" if acoustic_result.get("error") else "ok",
+                    "error":  acoustic_result.get("error"),
+                    "cough_detected": acoustic_result.get("cough_detected", False),
+                    "wheeze_detected": acoustic_result.get("wheeze_detected", False),
+                    "breathlessness_score": acoustic_result.get("breathlessness_score", 0.0),
+                    "pain_score_estimate":  acoustic_result.get("pain_score_estimate", 0),
+                    "distress_score":       acoustic_result.get("distress_score", 0.0),
+                    "alerts":               acoustic_result.get("alerts", []),
+                },
+            })
 
         # Log acoustic alerts if any were detected
         for alert_msg in acoustic_result.get("alerts", []):
@@ -2008,7 +2286,14 @@ def process_audio():
 
         # 8. Voice conversation history — use module-level store (NOT Flask session)
         # because MainVoice.py is a subprocess that posts without a session cookie.
-        _hist_key = user_id if user_id else 'guest'
+        #
+        # KEY BY (user_id, lang) — mixing English and Arabic history into the
+        # same conversation context confuses the LLM (it picks up cues from
+        # the wrong-language exchanges and may reply in the wrong language).
+        # Keeping per-language histories means switching language gives a clean
+        # context for the new language, while the prior language's history is
+        # preserved if the user switches back.
+        _hist_key = "{}:{}".format(user_id if user_id else 'guest', lang)
         voice_history = list(_voice_conv_store.get(_hist_key, []))[-_VOICE_HISTORY_MAX:]
 
         # 9. Run full agentic loop with all features
@@ -2026,10 +2311,41 @@ def process_audio():
         if consensus and consensus.get("final_recommendation") and not tool_results:
             ai_reply = consensus["final_recommendation"]
 
+        # 11b. VOICE LENGTH CAP — server-side enforcement of the prompt's
+        # "1-2 short sentences" rule. Claude sometimes ignores it (especially
+        # for medical-history questions) and produces 3+ sentences, which on
+        # NAOqi Arabic TTS can run 25+ seconds. That long TTS spike starves
+        # the tablet renderer, freezes the FSM poller, and the UI looks
+        # broken. Hard cap: first 2 sentences, or first 160 characters,
+        # whichever is shorter. Arabic uses ؟ / . / ! / ، as terminators.
+        def _voice_cap(text):
+            if not text:
+                return text
+            # Find sentence boundaries (both Latin and Arabic punctuation)
+            import re as _re
+            sentences = _re.split(r'(?<=[\.!\?؟])\s+', text.strip())
+            capped = ' '.join(sentences[:2]).strip()
+            if len(capped) > 160:
+                capped = capped[:157].rstrip() + '...'
+            return capped
+        ai_reply = _voice_cap(ai_reply)
+
         # 12. Persist voice history in module-level store (survives across requests)
         voice_history.append({"role": "user", "parts": [{"text": user_text}]})
         voice_history.append({"role": "model", "parts": [{"text": ai_reply}]})
+        # pop-then-set makes this key the most-recently-used (moves it to the end
+        # of the dict's insertion order) so LRU eviction below drops genuinely
+        # stale keys, not the active conversation.
+        _voice_conv_store.pop(_hist_key, None)
         _voice_conv_store[_hist_key] = voice_history[-_VOICE_HISTORY_MAX:]
+        # LRU eviction: drop oldest keys once we exceed the cap so the store
+        # never grows without bound over a long-running server.
+        while len(_voice_conv_store) > _VOICE_CONV_MAX_KEYS:
+            try:
+                _oldest = next(iter(_voice_conv_store))
+                del _voice_conv_store[_oldest]
+            except (StopIteration, KeyError):
+                break
 
         print(f"[VOICE] Reply: {ai_reply}")
         _slog("voice_interaction", patient_name=user_name, patient_id=user_id,
@@ -2185,40 +2501,74 @@ CHAT_TOOLS = [
 ]
 
 
+# Common Arabic name transliteration aliases — maps phonetic variants to a
+# canonical token so fuzzy matching isn't tripped by LLM transliteration drift
+# (e.g. user says "Amany Yahya" but qwen writes "Amany Yehia").
+_ARABIC_PHONETIC_ALIASES = {
+    "yehia": "yahya", "yahia": "yahya", "yehya": "yahya", "yihia": "yahya",
+    "mohamad": "mohamed", "muhammad": "mohamed", "mohammed": "mohamed", "mohamd": "mohamed",
+    "aly": "ali",
+    "elshami": "elshamy", "el-shamy": "elshamy",
+    "fuad": "fouad",
+    "samy": "sami",
+    "zeyad": "ziad",
+    "abdulla": "abdallah", "abdullah": "abdallah",
+    "abdelrahman": "abdelrahman", "abdulrahman": "abdelrahman",
+}
+
+def _phonetic_normalize(name: str) -> str:
+    """Map each token through the phonetic alias table and return the result."""
+    return " ".join(_ARABIC_PHONETIC_ALIASES.get(t, t) for t in name.lower().split())
+
+
 def _find_doctor_fuzzy(cleaned_name):
     """Find a Doctor row by name with graceful fuzzy fallback.
 
     Order:
       1. Substring ILIKE match (original behaviour).
-      2. Token-overlap match when the LLM paraphrased a name (e.g. the user
-         said 'Amany Yahya' but the LLM wrote 'Amany Yehia'). We only accept
-         when at least one token matches AND difflib similarity ≥ 0.75,
-         which protects against picking random doctors.
+      2. Phonetic-normalised ILIKE match — catches 'Amany Yehia' → 'Amany Yahya'.
+      3. Token-overlap + difflib similarity ≥ 0.68, comparing both sides with
+         honorifics stripped and phonetic normalization applied.
 
     Returns the Doctor row or None.
     """
     import difflib, re
     if not cleaned_name:
         return None
+
+    # Pass 1: exact substring match
     doctor = Doctor.query.filter(Doctor.name.ilike(f"%{cleaned_name}%")).first()
     if doctor:
         return doctor
-    # Fuzzy fallback
-    target = cleaned_name.lower().strip()
+
+    # Pass 2: phonetic-normalised ILIKE — cheap, handles the common case
+    norm = _phonetic_normalize(cleaned_name)
+    if norm != cleaned_name.lower():
+        norm_title = " ".join(t.capitalize() for t in norm.split())
+        doctor = Doctor.query.filter(Doctor.name.ilike(f"%{norm_title}%")).first()
+        if doctor:
+            return doctor
+
+    # Pass 3: fuzzy fallback — strip honorifics from DB names before comparison
+    _hon_re = re.compile(r'^(?:Dr\.?\s*|Prof\.?\s*|Doctor\s+|Professor\s+)', re.IGNORECASE)
+    target = _phonetic_normalize(cleaned_name)
     target_tokens = [t for t in re.split(r"\s+", target) if len(t) >= 3]
     if not target_tokens:
         return None
+
     best, best_score = None, 0.0
     for d in Doctor.query.all():
-        dname = (d.name or "").lower()
-        dtokens = re.split(r"\s+", dname)
-        shared = sum(1 for t in target_tokens if t in dname)
+        dname_raw = (d.name or "").lower()
+        dname_clean = _hon_re.sub("", dname_raw).strip()
+        dname_norm = _phonetic_normalize(dname_clean)
+        # Require at least one shared token as a cheap guard
+        shared = sum(1 for t in target_tokens if t in dname_norm)
         if shared == 0:
             continue
-        score = difflib.SequenceMatcher(None, target, dname).ratio()
+        score = difflib.SequenceMatcher(None, target, dname_norm).ratio()
         if score > best_score:
             best_score, best = score, d
-    return best if best_score >= 0.75 else None
+    return best if best_score >= 0.68 else None
 
 
 def _clean_doctor_name(name):
@@ -2410,7 +2760,19 @@ def execute_tool(tool_name, tool_input, user_id, user_name, role):
                                 "specialty": doc.specialty if doc else "",
                                 "date": a.appointment_date.strftime("%Y-%m-%d"),
                                 "time": a.time_slot.strftime("%H:%M")})
-            return {"appointments": result}
+            # Hard-label results with the logged-in patient name so the LLM
+            # cannot re-attribute them to a different patient mentioned in the
+            # conversation. Also add an explicit instruction.
+            return {
+                "appointments": result,
+                "_for_patient": user_name,
+                "_warning": (
+                    f"These are the appointments for the logged-in patient "
+                    f"'{user_name}' ONLY. Do NOT present them as belonging to any "
+                    f"other person the user mentioned. If the user asked about "
+                    f"another patient, reply that you can only show your own records."
+                ),
+            }
 
         elif tool_name == "cancel_appointment":
             appt_id = tool_input.get("appointment_id")
@@ -2505,10 +2867,32 @@ for _t in CHAT_TOOLS:
     })
 
 
+def _strip_emojis(text):
+    """Remove emoji and pictographic characters from a reply.
+
+    Why: Pepper's tablet runs an old WebKit that renders supplementary-plane
+    emoji (U+1F300+) poorly — Arabic + emoji especially seems to trip the
+    renderer, dropping the WebSocket and locking up the UI for several
+    seconds. Pepper's TTS also pronounces emojis as random sounds. Strip
+    them defensively even when the system prompt forbids them, because
+    Claude occasionally produces one anyway.
+    """
+    import re
+    if not text:
+        return text
+    # Remove supplementary-plane characters (emojis + symbols) and dingbats
+    return re.sub(
+        u'[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F\U0001F680-\U0001F6FF'
+        u'\U0001F900-\U0001F9FF\U00002600-\U000027BF\U0001F100-\U0001F1FF]+',
+        '', text
+    )
+
+
 def _clean_llm_output(text, lang="en"):
     """Strip markdown artifacts and internal tool-call chatter that local
     models sometimes leak into user-facing text."""
     import re
+    text = _strip_emojis(text or "")
     text = text.strip()
     # Strip leaked tool-result key prefixes that qwen sometimes echoes verbatim
     # (e.g. "_presentation_en ...", "\_presentation_en ...", "reply_en ...").
@@ -2767,7 +3151,43 @@ def _detect_intent(user_text, lang="en"):
     if re.search(profile_en, t) or re.search(profile_ar, user_text or ""):
         return "get_patient_profile"
 
+    # Navigation: guide / take me / where is X / where can I Y
+    # Checked BEFORE departments so "I need the radiology department" routes to
+    # navigation (the facility-name match fires) rather than to get_departments
+    # (the word "department" alone is too broad a signal).
+    nav_en = (
+        r"\btake me to\b|\bguide me (?:to|toward)?\b|\blead me to\b|\bdirect me to\b|"
+        r"\bhow do i (?:get|go|find) to\b|\bhow do i find\b|"
+        r"\bwhere (?:is|are|can i find|'?s)\b|"
+        r"\bwhere'?s\b|"                                   # contraction: "where's the ..."
+        r"\bwhere can (?:you|i)\s+(?:take|guide|lead|pay|find|go|get)\b|"
+        r"\bdirections? to\b|\bnavigate (?:me )?to\b|\b(?:show|point) me (?:the way|to)\b|"
+        r"\bi need (?:to get to|to find|the)\s+(?:pharmacy|lab|laboratory|radiology|emergency|"
+        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|operating|"
+        r"elevator|elevators|billing|waiting area|nurse)\b|"
+        r"\bi need to (?:get to|find|reach)\b|"            # "I need to find reception"
+        r"\bcan you (?:take|bring|show|point|guide|direct) me\b|"
+        r"\bi'?m hungry\b|"
+        r"\bwhich (?:floor|level|way)\b"
+    )
+    nav_ar = (
+        r"خذني إلى|دلني على|أرني|كيف أذهب|كيف أصل|أين هو|أين يقع|أين توجد|أين\s+الـ|"
+        r"اذهب بي|اصطحبني|اريد الذهاب|فين\s+(?:الصيدلية|المختبر|الطوارئ|الاستقبال|الحمام)"
+    )
+    if re.search(nav_en, t) or re.search(nav_ar, user_text or ""):
+        return "get_navigation_targets"
+
+    # Bare facility name (without "where is") — "pharmacy?", "the cafeteria please"
+    bare_facility_en = (
+        r"^(?:the\s+)?(?:pharmacy|laboratory|lab|radiology|emergency\s+(?:room|department)|"
+        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|"
+        r"operating theatres?|elevators?|billing|waiting area)\s*\??$"
+    )
+    if re.search(bare_facility_en, t):
+        return "get_navigation_targets"
+
     # Departments: "what departments do you have", "show hospital departments", etc.
+    # Placed AFTER navigation so facility-specific queries are not misclassified.
     dept_en = (
         r"\b(?:what|which|show|list|tell me(?: about)?|do you have|see)\s+"
         r"(?:the\s+)?(?:medical\s+|hospital\s+)?departments?\b|"
@@ -2781,36 +3201,6 @@ def _detect_intent(user_text, lang="en"):
     )
     if re.search(dept_en, t) or re.search(dept_ar, user_text or ""):
         return "get_departments"
-
-    # Navigation: guide / take me / where is X / where can I Y
-    nav_en = (
-        r"\btake me to\b|\bguide me (?:to|toward)?\b|\blead me to\b|\bdirect me to\b|"
-        r"\bhow do i (?:get|go|find) to\b|\bhow do i find\b|"
-        r"\bwhere (?:is|are|can i find|'?s)\b|"
-        r"\bwhere can (?:you|i)\s+(?:take|guide|lead|pay|find|go|get)\b|"
-        r"\bdirections? to\b|\bnavigate (?:me )?to\b|\b(?:show|point) me (?:the way|to)\b|"
-        r"\bi need (?:to get to|to find|the)\s+(?:pharmacy|lab|laboratory|radiology|emergency|"
-        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|operating|"
-        r"elevator|elevators|billing|waiting area|nurse)\b|"
-        r"\bi'?m hungry\b|"
-        r"\bwhich (?:floor|level|way)\b"
-    )
-    nav_ar = (
-        r"خذني إلى|دلني على|أرني|كيف أذهب|كيف أصل|أين هو|أين يقع|أين توجد|أين\s+الـ|"
-        r"اذهب بي|اصطحبني|اريد الذهاب|فين\s+(?:الصيدلية|المختبر|الطوارئ|الاستقبال|الحمام)"
-    )
-    if re.search(nav_en, t) or re.search(nav_ar, user_text or ""):
-        return "get_navigation_targets"
-
-    # Bare facility name (without "where is") — "pharmacy?", "the cafeteria please"
-    # — treat as a navigation query if no other intent matched above.
-    bare_facility_en = (
-        r"^(?:the\s+)?(?:pharmacy|laboratory|lab|radiology|emergency\s+(?:room|department)|"
-        r"icu|maternity|cafeteria|restroom|bathroom|toilet|reception|blood bank|"
-        r"operating theatres?|elevators?|billing|waiting area)\s*\??$"
-    )
-    if re.search(bare_facility_en, t):
-        return "get_navigation_targets"
 
     # Doctor recommendation / find a doctor
     recommend_en = (
@@ -2868,6 +3258,30 @@ def _detect_intent(user_text, lang="en"):
 # stroke, overdose, severe chest pain).
 _EMERGENCY_PATTERNS = [
     # (regex_en, regex_ar, reply_en, reply_ar, label)
+    #
+    # Witnessed / third-person emergency — matches "my husband had a seizure",
+    # "she is unconscious", "someone collapsed", etc. Checked FIRST so it is
+    # never shadowed by a more-specific pattern that fires on the wrong branch.
+    (
+        r"(?:he|she|they|my\s+\w+|someone|a\s+(?:man|woman|person|child|patient|visitor))"
+        r".{0,80}"
+        r"\b(?:seizure|convuls(?:ion|ing)|unconscious|unresponsive|not\s+breathing|"
+        r"collapsed|passed\s+out|fainted|no\s+pulse)\b"
+        r"|"
+        r"\b(?:had|having|is\s+having)\s+a\s+seizure\b"
+        r"|"
+        r"\b(?:unconscious|unresponsive)\b.{0,40}\b(?:lobby|floor|corridor|waiting|entrance)\b",
+        r"زوجي|زوجتي|ابني|ابنتي|شخص\s*(?:ما)?|أحد\s*(?:ما)?"
+        r".{0,80}"
+        r"(?:تشنج|فاقد\s*الوعي|لا\s*يستجيب|لا\s*يتنفس|انهار)",
+        "This is a medical emergency. Call emergency services immediately "
+        "(dial 122 or go to the Emergency Department on the Ground Floor right now). "
+        "Stay with the person, clear the area around them, and flag any hospital "
+        "staff nearby for immediate assistance. Do not leave them alone.",
+        "هذه حالة طارئة. اتصل بالإسعاف فوراً (122) أو توجه إلى قسم الطوارئ في الدور "
+        "الأرضي الآن. ابقَ مع الشخص وأزل أي أشياء حوله وأبلغ أي طاقم طبي قريب.",
+        "witnessed_emergency",
+    ),
     (
         r"\btongue\s+(?:is\s+|feels?\s+)?(?:swollen|swelling|numb|enlarged)|"
         r"\bthroat\s+(?:is\s+)?(?:closing|swelling|swollen|tight)|"
@@ -3110,22 +3524,208 @@ def _try_parse_raw_tool_call(text):
     return None
 
 
+# Alias map: words a patient might use → canonical search terms that appear in
+# navigation_targets.json facility names/types.  Used by _build_nav_directive.
+_NAV_ALIASES = {
+    "bathroom":       "restroom",
+    "toilet":         "restroom",
+    "washroom":       "restroom",
+    "loo":            "restroom",
+    " wc ":           "restroom",
+    "icu":            "icu",
+    "intensive care": "icu",
+    "pay ":           "billing",
+    "payment":        "billing",
+    " bill ":         "billing",
+    "my bill":        "billing",
+    "billing":        "billing",
+    "x-ray":          "radiology",
+    "xray":           "radiology",
+    "imaging":        "radiology",
+    " scan":          "radiology",
+    " lift":          "elevator",
+    "operating room": "operating",
+    "theatre":        "operating",
+    "theater":        "operating",
+    "hungry":         "cafeteria",
+    " food":          "cafeteria",
+    "blood bank":     "blood",
+    "labour":         "maternity",
+    "labor":          "maternity",
+    "delivery":       "maternity",
+    "waiting area":   "waiting",
+    " er ":           "emergency",
+    "emergency room": "emergency",
+    "emergency dept": "emergency",
+}
+
+
+def _build_nav_directive(tool_result, user_q):
+    """Pre-match a navigation query to the closest facility and return a
+    SYSTEM DIRECTIVE string.  Called from both the fast-path (before any LLM
+    inference) and the post-tool-call block inside the agentic loop."""
+    facilities = tool_result.get("facilities", [])
+    offices    = tool_result.get("doctor_offices", [])
+    user_q_lc  = (user_q or "").lower()
+
+    # Normalize using aliases so "bathroom"→"restroom", "icu"→"icu", etc.
+    search_q = user_q_lc
+    for alias, canonical in _NAV_ALIASES.items():
+        if alias in user_q_lc:
+            search_q = canonical
+            break
+
+    _matched = None
+    for fac in facilities:
+        fname = (fac.get("name") or "").lower()
+        ftype = (fac.get("facility_type") or "").lower()
+        # min-length 3 catches short but valid tokens like "icu", "lab", "er"
+        kws = [w for w in (fname + " " + ftype).split() if len(w) >= 3]
+        if any(kw in search_q or kw in user_q_lc for kw in kws):
+            _matched = f"{fac['name']} is located at {fac.get('location', 'the hospital')}."
+            break
+    if not _matched:
+        for off in offices:
+            oname = (off.get("name") or "").lower()
+            kws = [w for w in oname.split() if len(w) >= 3]
+            if any(kw in search_q or kw in user_q_lc for kw in kws):
+                _matched = (
+                    f"{off['name']}'s office is at "
+                    f"{off.get('location', 'the hospital')}."
+                )
+                break
+
+    if _matched:
+        return (
+            f"[SYSTEM DIRECTIVE] Navigation result: {_matched} "
+            f"Tell the patient exactly this location in one sentence. "
+            f"Do NOT list other locations or mention doctors."
+        )
+    # Unknown location — graceful refusal
+    _fac_lines = "; ".join(
+        f"{f['name']}: {f.get('location', '')}" for f in facilities[:10]
+    )
+    return (
+        f"[SYSTEM DIRECTIVE] The patient asked about a location that is not in our "
+        f"list. Hospital locations: {_fac_lines}. "
+        f"Tell the patient we do not have that specific location and suggest asking "
+        f"at reception. Do NOT list all locations."
+    )
+
+
 def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                                voice_mode, tool_results_for_display, lang="en"):
     """Ollama-based agentic loop with native structured tool calls — mirrors Claude's loop."""
-    max_tokens = 512 if voice_mode else 1024
+    # Intent-based token budget: simple lookups need far fewer tokens than
+    # booking/symptom/multi-step flows, so set max_tokens per intent rather than
+    # one global ceiling.  This alone saves 2-4 s per simple turn on GPU.
+    # Only truly stateless, context-free lookups get the 200-token budget.
+    # get_my_appointments is stateful (changes after every booking/cancel) —
+    # the model must always call fresh.  get_departments is excluded because
+    # the word "department" in nav queries (e.g. "I need the radiology
+    # department") can false-positive as that intent, dropping max_tokens
+    # to 200 and causing the model to answer from stale context.
+    _SIMPLE_INTENTS = {
+        "get_navigation_targets",
+        "get_patient_profile",
+    }
+    detected_early = _detect_intent(
+        next((m.get("content","") for m in reversed(messages)
+              if m.get("role") == "user" and isinstance(m.get("content"), str)), ""),
+        lang=lang,
+    )
+    if detected_early in _SIMPLE_INTENTS:
+        max_tokens = 200
+    elif voice_mode:
+        max_tokens = 512
+    else:
+        max_tokens = 1024
     max_iterations = 5
 
-    # Pre-loop intent hint: qwen often skips tools for profile/nav queries.
-    # Detect obvious intents and pin a system directive so the first turn
-    # emits the right tool call.
-    forced_tool = None
     last_user_msg = next(
         (m.get("content", "") for m in reversed(messages)
          if m.get("role") == "user" and isinstance(m.get("content"), str)),
         ""
     )
-    detected = _detect_intent(last_user_msg, lang=lang)
+    # detected_early was already computed for max_tokens; reuse it here.
+    detected = detected_early
+
+    # ── Fast-path: navigation skips Pass 1 (tool-decision LLM call) entirely ──
+    # Detect nav intent → execute tool directly → single LLM call with the
+    # pre-matched result.  Cuts nav turn time ~50% (20-25 s → 10-13 s).
+    # History is trimmed to the last 3 messages because nav is stateless.
+    if detected == "get_navigation_targets":
+        tool_result = execute_tool("get_navigation_targets", {}, user_id, user_name, role)
+        tool_results_for_display.append({"tool": "get_navigation_targets", "result": tool_result})
+        nav_directive = _build_nav_directive(tool_result, last_user_msg)
+        # Inject the directive via the system prompt so we never produce an
+        # invalid message sequence (tool-role message without a preceding
+        # assistant tool-call causes Ollama to mis-handle or ignore the result).
+        nav_system = system_prompt + f"\n\n{nav_directive}"
+        raw = call_ollama(nav_system, messages[-3:], max_tokens=200, num_ctx=2048)
+        if isinstance(raw, dict):
+            raw = raw.get("text", "")
+        return _clean_llm_output(raw, lang=lang) or "Done.", tool_results_for_display
+
+    # ── Fast-path: departments ──
+    # Execute tool → inject dept list into system prompt → single LLM call.
+    # History trimmed to 3 because dept listing is stateless.
+    if detected == "get_departments":
+        tool_result = execute_tool("get_departments", {}, user_id, user_name, role)
+        tool_results_for_display.append({"tool": "get_departments", "result": tool_result})
+        depts = tool_result.get("departments", [])
+        if depts:
+            dept_names = ", ".join(str(d) for d in depts if d)
+            dept_directive = (
+                f"[SYSTEM DIRECTIVE] Hospital departments: {dept_names}. "
+                f"Answer the patient's question about departments using this list."
+            )
+        else:
+            dept_directive = (
+                "[SYSTEM DIRECTIVE] Department data is unavailable. "
+                "Tell the patient to ask at the reception desk."
+            )
+        dept_system = system_prompt + f"\n\n{dept_directive}"
+        raw = call_ollama(dept_system, messages[-3:], max_tokens=200, num_ctx=2048)
+        if isinstance(raw, dict):
+            raw = raw.get("text", "")
+        return _clean_llm_output(raw, lang=lang) or "Done.", tool_results_for_display
+
+    # ── Fast-path: patient profile ──
+    # Execute tool → inject profile data into system prompt → single LLM call.
+    if detected == "get_patient_profile":
+        tool_result = execute_tool("get_patient_profile", {}, user_id, user_name, role)
+        tool_results_for_display.append({"tool": "get_patient_profile", "result": tool_result})
+        if not tool_result.get("error"):
+            profile_directive = (
+                f"[SYSTEM DIRECTIVE] Patient profile: {json.dumps(tool_result)}. "
+                f"Present the relevant information to the patient concisely."
+            )
+        else:
+            profile_directive = (
+                "[SYSTEM DIRECTIVE] Patient profile not found. "
+                "Tell the patient we couldn't retrieve their profile and suggest asking at reception."
+            )
+        profile_system = system_prompt + f"\n\n{profile_directive}"
+        raw = call_ollama(profile_system, messages[-3:], max_tokens=200, num_ctx=2048)
+        if isinstance(raw, dict):
+            raw = raw.get("text", "")
+        return _clean_llm_output(raw, lang=lang) or "Done.", tool_results_for_display
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # History trimming for the main agentic loop: semi-stateless intents only
+    # need recent context; complex multi-step flows need full history.
+    # (Stateless intents are already handled by fast-paths above.)
+    _SEMI_STATELESS = {"get_my_appointments"}
+    if detected in _SEMI_STATELESS:
+        messages = messages[-8:]
+        loop_num_ctx = 3072
+    else:
+        loop_num_ctx = 4096
+
+    # For other detected intents: inject a SYSTEM DIRECTIVE so qwen calls the
+    # right tool on its first iteration (it often skips tools otherwise).
+    forced_tool = None
     if detected:
         forced_tool = detected
         messages = messages + [{
@@ -3138,7 +3738,8 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
         }]
 
     for iteration in range(max_iterations):
-        result = call_ollama(system_prompt, messages, max_tokens=max_tokens, tools=OLLAMA_TOOLS)
+        result = call_ollama(system_prompt, messages, max_tokens=max_tokens,
+                             tools=OLLAMA_TOOLS, num_ctx=loop_num_ctx)
 
         # If result is a plain string, check for raw tool call JSON leaking into text
         if isinstance(result, str):
@@ -3234,7 +3835,7 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                 if prior_calls >= 2:
                     print(f"[TOOL-OFFLINE-LOOP] '{t_name}' already called {prior_calls}x this turn — forcing final answer")
                     messages.append({"role": "tool", "content": json.dumps({
-                        "error": f"Tool '{t_name}' already called {prior_calls} times this turn. Use previous results."
+                        "error": f"Tool '{t_name}' already called {prior_calls} times. Use previous results."
                     })})
                     messages.append({"role": "user", "content": (
                         f"[SYSTEM DIRECTIVE] You have already called '{t_name}' multiple times. "
@@ -3242,7 +3843,12 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
                         f"patient using the information you already have. If the requested item "
                         f"wasn't found, say so and suggest asking at reception."
                     )})
-                    continue
+                    # Force ONE final text-only call and return — prevents the
+                    # model from calling the tool again in a subsequent iteration.
+                    _final = call_ollama(system_prompt, messages, max_tokens=400, num_ctx=loop_num_ctx)
+                    if isinstance(_final, dict):
+                        _final = _final.get("text", "")
+                    return _clean_llm_output(_final, lang=lang) or "Done.", tool_results_for_display
 
                 print(f"[TOOL-OFFLINE] {t_name}({t_input})")
                 tool_result = execute_tool(t_name, t_input, user_id, user_name, role)
@@ -3283,47 +3889,7 @@ def _run_agentic_loop_offline(system_prompt, messages, user_id, user_name, role,
 
                 # Navigation: pre-compute matched location so model doesn't guess.
                 elif t_name == "get_navigation_targets" and not tool_result.get("error"):
-                    facilities = tool_result.get("facilities", [])
-                    offices    = tool_result.get("doctor_offices", [])
-                    user_q_lc  = (last_user_msg or "").lower()
-
-                    # Try to find a specific match from the user's query
-                    _matched = None
-                    for fac in facilities:
-                        fname = (fac.get("name") or "").lower()
-                        ftype = (fac.get("facility_type") or "").lower()
-                        kws = [w for w in (fname + " " + ftype).split() if len(w) >= 4]
-                        if any(kw in user_q_lc for kw in kws):
-                            _matched = (
-                                f"{fac['name']} is located at {fac.get('location', 'the hospital')}."
-                            )
-                            break
-                    if not _matched:
-                        for off in offices:
-                            oname = (off.get("name") or "").lower()
-                            kws = [w for w in oname.split() if len(w) >= 4]
-                            if any(kw in user_q_lc for kw in kws):
-                                _matched = (
-                                    f"{off['name']}'s office is at "
-                                    f"{off.get('location', 'the hospital')}."
-                                )
-                                break
-
-                    if _matched:
-                        _nav_directive = (
-                            f"[SYSTEM DIRECTIVE] Navigation result: {_matched} "
-                            f"Tell the patient exactly this location. "
-                            f"Do NOT list other locations or mention doctors."
-                        )
-                    else:
-                        _fac_lines = "; ".join(
-                            f"{f['name']}: {f.get('location','')}" for f in facilities[:10]
-                        )
-                        _nav_directive = (
-                            f"[SYSTEM DIRECTIVE] Hospital locations: {_fac_lines}. "
-                            f"Answer the patient's navigation question using ONLY this list. "
-                            f"Do NOT list doctor offices in response to a facility question."
-                        )
+                    _nav_directive = _build_nav_directive(tool_result, last_user_msg)
                     messages.append({"role": "user", "content": _nav_directive})
 
                 # Booking/cancellation error: block hallucinated success and block substitute booking.
@@ -3373,15 +3939,24 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
     if lang == "ar":
         lang_note = (
             "Respond in Arabic. Accept Egyptian, Gulf, Levantine, or Modern Standard Arabic dialects. "
-            "Always reply in the same dialect the patient used. Keep response under 60 words."
+            "Always reply in the same dialect the patient used. Keep response under 60 words. "
+            "NEVER use emojis, pictographs, or symbols (🤖, ❤️, 👋, etc.) — they break Pepper's TTS "
+            "and crash the tablet's old WebKit. Plain Arabic + Latin letters only."
         ) if not voice_mode else (
-            "Reply in Arabic in 1-2 short spoken sentences. Match the patient's Arabic dialect. "
+            "Reply in Arabic in ONE short spoken sentence (max 20 words). Match the patient's "
+            "Arabic dialect. NEVER use emojis, pictographs, or any symbol that isn't an Arabic "
+            "letter, an Arabic digit, a Latin letter for proper names, or basic punctuation "
+            "(؟ ، . ! ' \"). Emojis crash Pepper's tablet UI — ZERO emojis allowed. "
             "Tool calls do not count toward the word limit — call tools first, then speak a short reply."
         )
     else:
-        lang_note = ("Respond in English (under 80 words)." if not voice_mode else
-                     "Reply in English in 1-2 short spoken sentences suitable for text-to-speech. "
-                     "Tool calls do not count toward the word limit — call tools first, then speak a short reply.")
+        lang_note = (
+            "Respond in English (under 80 words). NEVER use emojis or pictographs."
+        ) if not voice_mode else (
+            "Reply in English in ONE short spoken sentence (max 20 words) suitable for text-to-speech. "
+            "NEVER use emojis, pictographs, or any non-letter symbol — they break the tablet UI. "
+            "Tool calls do not count toward the word limit — call tools first, then speak a short reply."
+        )
 
     today = datetime.now().strftime('%Y-%m-%d')
     weekday = datetime.now().strftime('%A')
@@ -3412,11 +3987,14 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
         f"12. When the user asks to book with a specific doctor by name, your FIRST tool call must be "
         f"get_doctors() with no arguments (or get_doctor_schedule(doctor_name=...)). Do NOT call "
         f"get_doctors with a guessed department.\n"
-        f"13. For ANY question about hospital navigation, guiding, rooms, offices, departments you "
-        f"can walk to, 'where is X', 'where can you take / guide me', 'how do I get to X', 'take me "
+        f"13. For ANY question about hospital navigation, room or facility location — including "
+        f"pharmacy, laboratory, lab, emergency room, ICU, maternity ward, cafeteria, café, "
+        f"restroom, bathroom, toilet, reception, blood bank, operating theatres, theatres, "
+        f"billing, radiology, X-ray, elevators, lifts, waiting area, any specific doctor's "
+        f"office, 'where is X', 'where can you take / guide me', 'how do I get to X', 'take me "
         f"to X', 'lead me to X', or 'direct me to X' — your FIRST action MUST be "
-        f"get_navigation_targets. Never answer these questions from memory. Never invent room "
-        f"numbers or floors.\n"
+        f"get_navigation_targets. ALWAYS call this tool even when you think you know the answer. "
+        f"Never answer location questions from memory. Never invent room numbers or floors.\n"
         f"14. Tool results are PRIVATE context for YOU. NEVER say phrases like 'Thank you for "
         f"providing the JSON data', 'Based on this information', 'the dataset', 'the data you "
         f"provided', or similar. The patient does not see any JSON. Speak as if you already know "
@@ -3425,9 +4003,12 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
         f"NOT silently change it to 15:00 (3 PM). If a time seems unlikely, ask the patient to "
         f"confirm rather than reinterpreting it.\n"
         f"16. For ANY question about the patient's OWN medical record — age, date of birth, blood "
-        f"type, allergies, medications, medical history, chronic conditions, past visits, or "
-        f"'what do you know about me' — your FIRST tool call MUST be get_patient_profile. "
-        f"Never reply 'I don't have that information' without calling get_patient_profile first.\n"
+        f"type, allergies, medications, prescriptions, medical history, chronic conditions, past "
+        f"visits, 'what do you know about me', 'are my meds safe', 'can I continue my "
+        f"prescriptions', or similar — your FIRST tool call MUST be get_patient_profile. "
+        f"Never reply 'I don't have that information' without calling get_patient_profile first. "
+        f"NEVER use placeholder text like '[list of medications]' — if the profile has no "
+        f"medications on file, say so explicitly.\n"
         f"17. Booking intent is triggered by ANY of: 'book', 'schedule', 'reserve', 'make an "
         f"appointment', 'احجز', 'موعد' — regardless of whether the user wrote 'Dr.' or 'Doctor' or "
         f"no title at all, and regardless of the language. Arabic+English mixed names (e.g. "
@@ -3511,7 +4092,37 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
         f"or department to see, identify the correct specialty (chest pain→Cardiology, "
         f"knee pain→Orthopedics, headache+dizziness→Neurology, skin issue→Dermatology, "
         f"etc.) then call get_doctors with that specialty. NEVER name a specific doctor "
-        f"before you have called get_doctors and seen the result in this turn."
+        f"before you have called get_doctors and seen the result in this turn.\n"
+        f"37. POST-CANCEL REFRESH — After any cancellation (confirmed or failed), if the "
+        f"patient asks what appointments they have, what is left, or anything about their "
+        f"current schedule, ALWAYS call get_my_appointments to get the live DB state. "
+        f"Do NOT answer from conversation context — the list changed after the cancel.\n"
+        f"38. WITNESSED EMERGENCY — If the patient describes ANYONE ELSE (husband, wife, "
+        f"child, friend, stranger) having a medical emergency — seizure, unconscious, "
+        f"not breathing, collapsing, stroke — respond with the same urgency as a first-person "
+        f"emergency. You MUST use the words 'emergency' and 'immediately'. Direct them to the "
+        f"Emergency Department on the Ground Floor. Do NOT book appointments or call any tool.\n"
+        f"39. PREGNANCY + MEDICATIONS — If a patient mentions they are pregnant (or just found "
+        f"out) and asks whether their medications or prescriptions are safe, you MUST: "
+        f"(a) call get_patient_profile first, (b) NEVER use placeholder text like "
+        f"'[list of medications]' — state what the profile actually shows, "
+        f"(c) call get_doctors with department='Obstetrics & Gynecology' to recommend an "
+        f"OB/GYN doctor by real name from the tool result.\n"
+        f"40. MULTI-QUESTION TURNS — When the patient asks two or more distinct questions in "
+        f"one message (e.g. blood type AND pharmacy location AND appointments), call ALL "
+        f"required tools in sequence within the same turn. Do not skip any tool or answer "
+        f"any sub-question from memory when a live tool answer is available.\n"
+        f"41. NO STALE RECALL — Conversation history is NOT a source of truth. Even if you "
+        f"saw a list of appointments, a profile, or a schedule earlier in the conversation, "
+        f"you MUST re-call the tool whenever the patient asks again. State changes between "
+        f"turns (cancellations, new bookings, profile edits). Specifically: every 'show / "
+        f"list / what are / do I have' question about MY appointments, MY profile, MY "
+        f"medications, MY blood type, OR MY anything personal triggers a fresh tool call — "
+        f"NO EXCEPTIONS. Answering 'as you mentioned earlier' is a bug.\n"
+        f"42. LANGUAGE-SWITCH RECALL — When the patient switches language (English↔Arabic) "
+        f"and asks the SAME kind of question they asked before (e.g. 'show my appointments' "
+        f"in EN after asking the same in AR), still call the tool. Language switch resets "
+        f"context — never assume the prior tool result still applies."
     )
 
     # ---- FAISS RAG: inject relevant hospital knowledge ----
@@ -3575,6 +4186,53 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
 
     max_iterations = 5
 
+    def _call_claude_with_retry(payload):
+        """POST to Anthropic with retry on transient errors (529 overloaded,
+        429 rate-limit, 5xx, read timeout). Backoff: 1s, 2s, 4s.
+        Raises RuntimeError on non-retryable error or after retries exhausted.
+        """
+        last_err = "no response"
+        for attempt in range(4):
+            try:
+                resp = requests.post("https://api.anthropic.com/v1/messages",
+                                     headers=headers, json=payload, timeout=45)
+                # Retry on transient HTTP statuses
+                if resp.status_code in (429, 500, 502, 503, 504, 529):
+                    last_err = f"HTTP {resp.status_code}"
+                    print(f"[CLAUDE-RETRY] {last_err} on attempt {attempt + 1}/4")
+                    if attempt < 3:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise RuntimeError(f"Claude API {last_err} after 4 attempts")
+                rj = resp.json()
+                if "error" in rj:
+                    err_type = rj["error"].get("type", "")
+                    err_msg  = rj["error"].get("message", "API error")
+                    # Application-level transient errors
+                    if err_type in ("overloaded_error", "rate_limit_error", "api_error"):
+                        last_err = f"{err_type}: {err_msg}"
+                        print(f"[CLAUDE-RETRY] {last_err} on attempt {attempt + 1}/4")
+                        if attempt < 3:
+                            time.sleep(2 ** attempt)
+                            continue
+                    raise RuntimeError(err_msg)
+                return rj
+            except requests.exceptions.Timeout:
+                last_err = "read timeout (>45s)"
+                print(f"[CLAUDE-RETRY] {last_err} on attempt {attempt + 1}/4")
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"Claude API {last_err}")
+            except requests.exceptions.ConnectionError as ce:
+                last_err = f"connection error: {ce}"
+                print(f"[CLAUDE-RETRY] {last_err} on attempt {attempt + 1}/4")
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(last_err)
+        raise RuntimeError(f"Claude API failed: {last_err}")
+
     for _ in range(max_iterations):
         payload = {
             "model": CLAUDE_MODEL,
@@ -3583,12 +4241,7 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
             "tools": CHAT_TOOLS,
             "messages": claude_messages
         }
-        resp = requests.post("https://api.anthropic.com/v1/messages",
-                             headers=headers, json=payload, timeout=30)
-        resp_json = resp.json()
-
-        if "error" in resp_json:
-            raise RuntimeError(resp_json["error"].get("message", "API error"))
+        resp_json = _call_claude_with_retry(payload)
 
         stop_reason = resp_json.get("stop_reason", "")
         content     = resp_json.get("content", [])
@@ -3602,6 +4255,29 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
                 t_name  = tb["name"]
                 t_input = tb.get("input", {})
                 print(f"[TOOL] {t_name}({t_input})")
+
+                # Loop guard: same tool called 3+ times in one turn → break the
+                # loop and force a final answer (mirrors the offline loop guard).
+                prior_calls = sum(
+                    1 for tr in tool_results_for_display
+                    if isinstance(tr, dict) and tr.get("tool") == t_name
+                )
+                if prior_calls >= 2:
+                    print(f"[TOOL-ONLINE-LOOP] '{t_name}' already called {prior_calls}x — forcing final answer")
+                    tool_result_contents.append({
+                        "type": "tool_result",
+                        "tool_use_id": tb["id"],
+                        "content": json.dumps({
+                            "error": (
+                                f"Tool '{t_name}' already called {prior_calls} times this turn. "
+                                f"Use the results you already have. Do NOT call any more tools — "
+                                f"write a plain-text final answer to the patient. "
+                                f"If the requested item was not found, say so and suggest asking at reception."
+                            )
+                        })
+                    })
+                    continue
+
                 result = execute_tool(t_name, t_input, user_id, user_name, role)
                 tool_results_for_display.append({"tool": t_name, "result": result})
                 content_str = json.dumps(result)
@@ -3622,6 +4298,10 @@ def run_agentic_loop(user_text, user_id, user_name, role, lang="en",
             continue
 
         final_text = " ".join(text_parts).strip() or "Done."
+        # Apply the same output-cleaning pipeline as the offline path:
+        # strips placeholder text like [list of medications], markdown markers,
+        # tool-name leakage, and dataset-narration sentences.
+        final_text = _clean_llm_output(final_text, lang=lang)
         return final_text, tool_results_for_display
 
     return "I processed your request.", tool_results_for_display
@@ -3662,17 +4342,32 @@ def api_chat_ai():
             })
 
         # --- Run AI enrichment in parallel context ---
+        # Each stage is independently guarded — a crash in sentiment must not
+        # kill NER, and a crash in any enrichment must not kill the whole turn.
+
         # 1. Sentiment analysis
-        sentiment = sentiment_analyzer.analyze(user_text, lang)
-        if sentiment.get("alert"):
-            print(f"[ALERT] Distress detected for {user_name}: {sentiment.get('reason')}")
+        try:
+            sentiment = sentiment_analyzer.analyze(user_text, lang)
+            if sentiment.get("alert"):
+                print(f"[ALERT] Distress detected for {user_name}: {sentiment.get('reason')}")
+        except Exception as _e:
+            print(f"[ENRICH] sentiment failed: {_e}")
+            sentiment = {"sentiment": "neutral", "label": "neutral", "score": 0.0}
 
         # 2. Medical NER — extract entities from message
-        ner_entities = medical_ner.extract(user_text)
+        try:
+            ner_entities = medical_ner.extract(user_text)
+        except Exception as _e:
+            print(f"[ENRICH] medical_ner failed: {_e}")
+            ner_entities = {"symptoms": [], "medications": []}
 
         # 3. Load conversational memory
-        mem = ConversationMemory(db, PatientMemory)
-        memory_ctx = mem.get_context(user_id) if user_id else ""
+        try:
+            mem = ConversationMemory(db, PatientMemory)
+            memory_ctx = mem.get_context(user_id) if user_id else ""
+        except Exception as _e:
+            print(f"[ENRICH] conversation_memory failed: {_e}")
+            memory_ctx = ""
 
         # 4. Multi-agent consensus for high-stakes messages
         consensus = None
@@ -3729,10 +4424,27 @@ def api_chat_ai():
             "consensus": consensus,
         })
     except Exception as e:
-        print(f"[CHAT ERROR] {e}")
-        _slog("chat_message", patient_name=user_name, patient_id=user_id,
-              success=False, user_said=user_text[:200], error=str(e))
-        return jsonify({"success": False, "answer": "I am having trouble thinking right now. Please try again."})
+        tb = traceback.format_exc()
+        print(f"[CHAT ERROR] {type(e).__name__}: {e}\n{tb}")
+        try:
+            _slog("chat_message", patient_name=user_name, patient_id=user_id,
+                  success=False, user_said=user_text[:200],
+                  error=f"{type(e).__name__}: {e}",
+                  traceback=tb[-2000:])
+        except Exception:
+            pass
+        # Surface a hint about what failed so the patient/test can distinguish
+        # transient overload from a real bug, without leaking internals.
+        msg_low = str(e).lower()
+        if any(s in msg_low for s in ("overload", "rate", "529", "429", "5xx", "timeout")):
+            user_msg = ("I'm a little overloaded right now — please try again "
+                        "in a few seconds." if lang != "ar"
+                        else "أنا مشغول قليلاً الآن — حاول مرة أخرى بعد لحظات.")
+        else:
+            user_msg = ("I am having trouble thinking right now. Please try again."
+                        if lang != "ar"
+                        else "أواجه مشكلة في التفكير الآن. حاول مرة أخرى.")
+        return jsonify({"success": False, "answer": user_msg})
     
 # --- 4. SIGNUP ---
 @app.route("/api/signup", methods=["POST"])
@@ -4087,9 +4799,11 @@ def api_camera_snapshot():
 
 @app.route("/api/camera/snapshot_b64", methods=["GET"])
 def api_camera_snapshot_b64():
-    """Proxy: return a base64 frame from the camera server."""
+    """Proxy: return a base64 frame from the camera server.
+    Longer timeout than /snapshot: this triggers an on-demand VGA still
+    (resolution switch + settle on the robot) for face recognition."""
     try:
-        r = requests.get(f"http://127.0.0.1:{CAM_SERVER_PORT}/snapshot_b64", timeout=3)
+        r = requests.get(f"http://127.0.0.1:{CAM_SERVER_PORT}/snapshot_b64", timeout=8)
         if r.status_code == 200:
             return jsonify(r.json())
         return jsonify({"error": "Camera server returned " + str(r.status_code)}), 503
