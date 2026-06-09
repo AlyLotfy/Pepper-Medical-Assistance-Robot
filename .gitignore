@@ -46,6 +46,8 @@ app.db
 *.ogg
 *.mp3
 *.mp4
+# demo video — documentation asset, intentionally tracked
+!project_images/pepper_demo.mp4
 temp.wav
 temp_voice.wav
 record.wav

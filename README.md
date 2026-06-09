@@ -24,7 +24,7 @@ Pepper Medical Assistance Robot transforms a **SoftBank Pepper humanoid** into a
 
 It's the kind of project that sits at the intersection of robotics, real-time systems, and modern AI: Whisper for speech, Claude (or local Ollama) for reasoning with agentic tool-calling, FAISS-indexed RAG for hospital knowledge, OpenCV for face login, and NAOqi for the body underneath it all.
 
-> **Watch it in action:** _(add demo video link / GIF here once recorded)_
+> **Watch it in action:** [demo video](project_images/pepper_demo.mp4) — see the [Demo & Gallery](#demo--gallery) section below.
 
 ---
 
@@ -46,6 +46,33 @@ It's the kind of project that sits at the intersection of robotics, real-time sy
 - **Medical NER** for extracting symptoms, drugs, and body parts from free text
 - **Offline mode** — no internet required after model pull
 - **Live MJPEG camera stream** from Pepper to the tablet UI
+
+---
+
+## Demo & Gallery
+
+### Live Demo Video
+
+A short walkthrough of a patient interacting with Pepper — voice request, AI response, and tablet UI in action.
+
+▶️ **[Watch the demo (project_images/pepper_demo.mp4)](project_images/pepper_demo.mp4)**
+
+### System & Design Figures
+
+| | |
+|---|---|
+| ![Interaction concept](project_images/Screenshot%202026-06-01%20023852.png) | ![Platform integration overview](project_images/Screenshot%202026-06-02%20154048.png) |
+| **Socially Assistive Healthcare Robot — interaction concept** | **Pepper ↔ Python Intelligence Server integration** |
+| ![RAG pipeline](project_images/Screenshot%202026-06-02%20155228.png) | ![Capability coverage](project_images/Screenshot%202026-06-02%20155602.png) |
+| **RAG pipeline for health queries** | **Functional capability coverage across domains** |
+
+### Tablet UI
+
+![Face ID enrollment screen](project_images/photo_5828179043839315512_y.jpg)
+
+*Face ID enrollment — patients register their face to log in without a password.*
+
+> 📂 The full set of screenshots, diagrams, and interaction photos lives in [`project_images/`](project_images/).
 
 ---
 
